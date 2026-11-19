@@ -21,7 +21,8 @@ use zeroize::Zeroizing;
 use super::header::CostJson;
 use super::manifest::{Entry, Id, Kind};
 use super::{
-    clean_name, file_executable, file_mtime, unique_disk_name, Outcome, Pack, Progress, Vault,
+    clean_name, file_executable, file_mtime, set_mtime, unique_disk_name, Outcome, Pack, Progress,
+    Vault,
 };
 use crate::crypto::hybrid::{self, HybridCiphertext, HybridPublicKey};
 use crate::crypto::password::{self, Argon2Cost};
@@ -582,10 +583,7 @@ fn extract_to_folder(
                     return Err(CoreError::DecryptFailed);
                 }
                 f.into_inner().map_err(|e| e.into_error())?.sync_all()?;
-                let _ = filetime::set_file_mtime(
-                    &target,
-                    filetime::FileTime::from_unix_time(item.modified, 0),
-                );
+                set_mtime(&target, item.modified);
                 #[cfg(unix)]
                 if item.executable {
                     use std::os::unix::fs::PermissionsExt;

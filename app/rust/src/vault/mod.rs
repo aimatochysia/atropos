@@ -702,10 +702,7 @@ impl Vault {
                     return Err(e);
                 }
                 fs::rename(&tmp, &target)?;
-                let _ = filetime::set_file_mtime(
-                    &target,
-                    filetime::FileTime::from_unix_time(entry.modified, 0),
-                );
+                set_mtime(&target, entry.modified);
                 #[cfg(unix)]
                 if entry.executable {
                     use std::os::unix::fs::PermissionsExt;
@@ -858,3 +855,16 @@ impl<W: Write> Write for HashWriter<W> {
 
 #[cfg(test)]
 mod tests;
+
+/// Best effort: gives a restored file its original modification time.
+pub(crate) fn set_mtime(path: &Path, unix_secs: i64) {
+    use std::time::{Duration, UNIX_EPOCH};
+    let t = if unix_secs >= 0 {
+        UNIX_EPOCH + Duration::from_secs(unix_secs as u64)
+    } else {
+        UNIX_EPOCH - Duration::from_secs(unix_secs.unsigned_abs())
+    };
+    if let Ok(f) = fs::File::options().write(true).open(path) {
+        let _ = f.set_modified(t);
+    }
+}
