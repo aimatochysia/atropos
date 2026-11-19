@@ -1,0 +1,16 @@
+# Packages the prebuilt Atropos tree (packaging/linux/build-packages.sh
+# output) for Arch Linux. The release workflow sets pkgver and copies the
+# staged tree next to this file as pkgroot/.
+pkgname=atropos
+pkgver=0.0.0
+pkgrel=1
+pkgdesc="Encrypt folders and files with hybrid post-quantum cryptography"
+arch=('x86_64')
+url="https://github.com/aimatochysia/atropos"
+license=('custom')
+depends=('gtk3' 'glibc')
+options=('!strip' '!debug')
+
+package() {
+  cp -a "$startdir/pkgroot/." "$pkgdir/"
+}

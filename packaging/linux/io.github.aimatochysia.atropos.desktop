@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Atropos
+GenericName=File encryption
+Comment=Encrypt folders and files with hybrid post-quantum cryptography
+Exec=atropos
+Icon=io.github.aimatochysia.atropos
+Terminal=false
+Categories=Utility;Security;
+Keywords=encrypt;encryption;vault;security;post-quantum;
+StartupWMClass=io.github.aimatochysia.atropos
