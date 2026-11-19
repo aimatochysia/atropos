@@ -23,7 +23,9 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use self::blob::BlobReader;
-use self::header::{HeaderBody, HeaderFile, SlotKind, Unlock, VaultSecrets, DEVICE_TTL_SECS};
+use self::header::{
+    CardSlotJson, HeaderBody, HeaderFile, SlotKind, Unlock, VaultSecrets, DEVICE_TTL_SECS,
+};
 use self::manifest::{DataRef, Entry, Id, Kind, Manifest, Record};
 use crate::crypto::password::Argon2Cost;
 use crate::crypto::random_array;
@@ -162,6 +164,12 @@ impl Vault {
             },
             phrase,
         ))
+    }
+
+    /// The card slots of a locked vault (read from its header).
+    pub fn card_slots(path: &Path) -> CoreResult<Vec<CardSlotJson>> {
+        let h = read_header(path)?;
+        Ok(h.body.slots.iter().filter_map(|s| s.card.clone()).collect())
     }
 
     pub fn unlock(path: &Path, how: &Unlock) -> CoreResult<Vault> {
@@ -311,6 +319,57 @@ impl Vault {
         if let Some(slot) = body.device_slot_mut(device) {
             slot.expires = Some(t + DEVICE_TTL_SECS);
             slot.renewed = Some(t);
+        }
+        self.save_header(body)
+    }
+
+    /// Adds a card slot. `shared` is the ECDH secret for `card` (computed
+    /// locally from the ephemeral key, and checked against the card).
+    pub fn add_card(&mut self, card: CardSlotJson, shared: &[u8], label: &str) -> CoreResult<()> {
+        let mut body = self.header.body.clone();
+        // Adding the same card again replaces its slot.
+        body.slots.retain(|s| {
+            !(s.kind == SlotKind::Card && s.card.as_ref().map(|c| &c.public) == Some(&card.public))
+        });
+        body.add_slot(
+            &self.secrets,
+            &Unlock::Card {
+                card: &card,
+                shared,
+            },
+            Argon2Cost::DEFAULT,
+        )?;
+        let slot = body.slots.last_mut().ok_or(CoreError::Crypto)?;
+        slot.label = Some(label.chars().take(64).collect());
+        slot.renewed = Some(now());
+        self.save_header(body)
+    }
+
+    /// Card slots: (slot id, label, added at, card).
+    pub fn cards(&self) -> Vec<(Vec<u8>, String, i64, CardSlotJson)> {
+        self.header
+            .body
+            .slots
+            .iter()
+            .filter_map(|s| {
+                let c = s.card.clone()?;
+                Some((
+                    s.id.clone(),
+                    s.label.clone().unwrap_or_default(),
+                    s.renewed.unwrap_or(0),
+                    c,
+                ))
+            })
+            .collect()
+    }
+
+    pub fn remove_card(&mut self, slot_id: &[u8]) -> CoreResult<()> {
+        let mut body = self.header.body.clone();
+        let before = body.slots.len();
+        body.slots
+            .retain(|s| !(s.kind == SlotKind::Card && s.id == slot_id));
+        if body.slots.len() == before {
+            return Ok(());
         }
         self.save_header(body)
     }

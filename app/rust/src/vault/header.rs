@@ -30,6 +30,21 @@ pub enum SlotKind {
     Recovery,
     /// A secret held by one device's hardware keystore behind biometrics.
     Device,
+    /// ECDH with a smartcard's private key (OpenPGP or PIV), behind its PIN.
+    Card,
+}
+
+/// The public half of a card slot: the card's key and the ephemeral key the
+/// slot was made with. The card recomputes ECDH between its private key and
+/// `ephemeral` to open the slot.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct CardSlotJson {
+    pub applet: String,
+    pub curve: String,
+    #[serde(with = "super::b64")]
+    pub public: Vec<u8>,
+    #[serde(with = "super::b64")]
+    pub ephemeral: Vec<u8>,
 }
 
 /// How long a device (biometric) slot works after the last unlock with the
@@ -95,6 +110,9 @@ pub struct Slot {
     /// was turned back.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub renewed: Option<i64>,
+    /// Card slots: which card key opens it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub card: Option<CardSlotJson>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -178,6 +196,11 @@ pub enum Unlock<'a> {
         device: &'a [u8],
         secret: &'a [u8; 32],
     },
+    /// `shared` is the ECDH result the card computed for `card`.
+    Card {
+        card: &'a CardSlotJson,
+        shared: &'a [u8],
+    },
 }
 
 impl Unlock<'_> {
@@ -197,11 +220,21 @@ fn slot_aad(body: &HeaderBody, slot: &Slot) -> Vec<u8> {
         SlotKind::Password => 1,
         SlotKind::Recovery => 2,
         SlotKind::Device => 3,
+        SlotKind::Card => 4,
     });
     aad.extend_from_slice(&pk_hash);
     if let Some(d) = &slot.device {
         aad.extend_from_slice(b"device");
         aad.extend_from_slice(d);
+    }
+    if let Some(c) = &slot.card {
+        aad.extend_from_slice(b"card");
+        aad.extend_from_slice(c.applet.as_bytes());
+        aad.push(0);
+        aad.extend_from_slice(c.curve.as_bytes());
+        aad.push(0);
+        aad.extend_from_slice(&c.public);
+        aad.extend_from_slice(&c.ephemeral);
     }
     aad
 }
@@ -227,6 +260,13 @@ fn slot_key(slot: &Slot, how: &Unlock) -> CoreResult<Option<Zeroizing<[u8; 32]>>
                 salt,
                 secret.as_ref(),
                 &[b"atropos/slot/device/v1"],
+            )?))
+        }
+        (SlotKind::Card, Unlock::Card { card, shared }) if slot.card.as_ref() == Some(*card) => {
+            Ok(Some(derive_key(
+                salt,
+                shared,
+                &[b"atropos/slot/card/v1", &card.public, &card.ephemeral],
             )?))
         }
         _ => Ok(None),
@@ -261,6 +301,10 @@ impl HeaderBody {
         how: &Unlock,
         cost: Argon2Cost,
     ) -> CoreResult<()> {
+        let card = match how {
+            Unlock::Card { card, .. } => Some((*card).clone()),
+            _ => None,
+        };
         let (kind, salt, argon2, device) = match how {
             Unlock::Password(_) => (
                 SlotKind::Password,
@@ -280,6 +324,7 @@ impl HeaderBody {
                 None,
                 Some(device.to_vec()),
             ),
+            Unlock::Card { .. } => (SlotKind::Card, random_array::<32>()?.to_vec(), None, None),
         };
         let mut slot = Slot {
             id: random_array::<8>()?.to_vec(),
@@ -292,6 +337,7 @@ impl HeaderBody {
             label: None,
             expires: None,
             renewed: None,
+            card,
         };
         let key = slot_key(&slot, how)?.ok_or(CoreError::Crypto)?;
         let nonce = random_array::<12>()?;

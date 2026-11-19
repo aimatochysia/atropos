@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 
 import '../core/biometrics.dart';
+import '../core/cards.dart';
 import '../core/platform_files.dart';
 import '../src/rust/api/settings.dart' as rs;
 import '../src/rust/api/vault.dart';
@@ -64,11 +65,13 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     required this.store,
     this.files = const PlatformFiles(),
     this.biometrics = const PlatformBiometrics(),
+    this.cards = const PlatformCardAccess(),
   });
 
   final SettingsStore store;
   final PlatformFiles files;
   final Biometrics biometrics;
+  final CardAccess cards;
 
   /// Null until [load] or when it could not be made.
   String? deviceId;

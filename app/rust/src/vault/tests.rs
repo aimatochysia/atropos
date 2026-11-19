@@ -270,3 +270,50 @@ fn expired_device_slot_is_refused() {
     )
     .unwrap();
 }
+
+#[test]
+fn card_slot_round_trip_with_simulated_card() {
+    use crate::card::sim::{block_on, SimCard};
+    use crate::card::{agree, enroll_ephemeral, probe, Curve};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("v");
+    let (mut v, _) = Vault::create(&path, PW, fast()).unwrap();
+    let mut card = SimCard::piv(Curve::P384);
+    let key = block_on(probe(&mut card)).unwrap().key.unwrap();
+    let (ephemeral, shared) = enroll_ephemeral(&key).unwrap();
+    let slot = CardSlotJson {
+        applet: key.applet.as_str().into(),
+        curve: key.curve.as_str().into(),
+        public: key.public.clone(),
+        ephemeral,
+    };
+    v.add_card(slot.clone(), &shared, "Work card").unwrap();
+    assert_eq!(v.cards().len(), 1);
+    drop(v);
+
+    assert_eq!(Vault::card_slots(&path).unwrap(), vec![slot.clone()]);
+    let on_card = block_on(agree(&mut card, &key, b"123456", &slot.ephemeral)).unwrap();
+    let mut v = Vault::unlock(
+        &path,
+        &Unlock::Card {
+            card: &slot,
+            shared: &on_card,
+        },
+    )
+    .unwrap();
+    // Another card's answer does not open it.
+    let mut other = SimCard::piv(Curve::P384);
+    let other_key = block_on(probe(&mut other)).unwrap().key.unwrap();
+    let wrong = block_on(agree(&mut other, &other_key, b"123456", &slot.ephemeral)).unwrap();
+    assert!(Vault::unlock(
+        &path,
+        &Unlock::Card {
+            card: &slot,
+            shared: &wrong
+        }
+    )
+    .is_err());
+    let id = v.cards()[0].0.clone();
+    v.remove_card(&id).unwrap();
+    assert!(v.cards().is_empty());
+}
