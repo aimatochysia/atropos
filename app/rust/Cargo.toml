@@ -1,0 +1,44 @@
+[package]
+name = "atropos_core"
+version = "0.1.0"
+edition = "2021"
+description = "Core encryption, vault and update logic for the Atropos app"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+flutter_rust_bridge = "=2.13.0"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+semver = "1"
+sha2 = "0.10"
+minisign-verify = "0.2"
+# Cryptography. aws-lc-rs supplies the FIPS-approved primitives (ML-KEM-1024,
+# ECDH P-384, AES-256-GCM, HKDF-SHA-384); Argon2id comes from RustCrypto.
+# "prebuilt-nasm" lets Windows builds work without NASM installed.
+aws-lc-rs = { version = "1.19", features = ["prebuilt-nasm"] }
+argon2 = { version = "0.5", features = ["zeroize"] }
+zeroize = { version = "1.8", features = ["derive"] }
+subtle = "2.6"
+base64 = "0.22"
+hex = "0.4"
+bip39 = { version = "2", default-features = false, features = ["std", "zeroize"] }
+zxcvbn = "3"
+
+[dev-dependencies]
+minisign = "0.10.0"
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
