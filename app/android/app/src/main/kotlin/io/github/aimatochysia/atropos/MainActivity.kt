@@ -32,6 +32,13 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     private var pendingPick: Result? = null
+    private var nfcCards: NfcCards? = null
+
+    override fun onPause() {
+        // Reader mode only works in the foreground; a card in progress is lost.
+        nfcCards?.cancel()
+        super.onPause()
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -59,6 +66,17 @@ class MainActivity : FlutterFragmentActivity() {
                         }
                     }
                     else -> result.notImplemented()
+                }
+            }
+        val nfc = NfcCards(this)
+        nfcCards = nfc
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "atropos/nfc")
+            .setMethodCallHandler { call, result ->
+                if (call.method == "cancel") {
+                    nfc.cancel()
+                    result.success(null)
+                } else {
+                    nfc.handle(call, result)
                 }
             }
         val biometric = BiometricVault(this)

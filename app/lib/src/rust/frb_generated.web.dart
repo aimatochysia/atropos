@@ -7,6 +7,7 @@
 // ignore_for_file: argument_type_not_assignable
 
 import 'api/app.dart';
+import 'api/card.dart';
 import 'api/secure_input.dart';
 import 'api/selftest.dart';
 import 'api/settings.dart';
@@ -30,6 +31,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   });
 
   CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_CardReaderPtr => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCardReader;
+
+  CrossPlatformFinalizerArg
   get rust_arc_decrement_strong_count_CreatedVaultPtr => wire
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault;
 
@@ -43,6 +48,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw);
+
+  @protected
+  CardReader
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCardReader(
+    dynamic raw,
+  );
 
   @protected
   CreatedVault
@@ -69,6 +80,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  CardReader
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCardReader(
+    dynamic raw,
+  );
+
+  @protected
   CreatedVault
   dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
     dynamic raw,
@@ -83,6 +100,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   VaultSession
   dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVaultSession(
+    dynamic raw,
+  );
+
+  @protected
+  FutureOr<Uint8List> Function(Uint8List)
+  dco_decode_DartFn_Inputs_list_prim_u_8_strict_Output_list_prim_u_8_strict_AnyhowException(
+    dynamic raw,
+  );
+
+  @protected
+  Object dco_decode_DartOpaque(dynamic raw);
+
+  @protected
+  CardReader
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCardReader(
     dynamic raw,
   );
 
@@ -146,7 +178,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ReleaseAsset dco_decode_box_autoadd_release_asset(dynamic raw);
 
   @protected
+  int dco_decode_box_autoadd_u_8(dynamic raw);
+
+  @protected
   UpdateInfo dco_decode_box_autoadd_update_info(dynamic raw);
+
+  @protected
+  CardInfo dco_decode_card_info(dynamic raw);
+
+  @protected
+  CardSlotInfo dco_decode_card_slot_info(dynamic raw);
 
   @protected
   CoreError dco_decode_core_error(dynamic raw);
@@ -167,10 +208,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 dco_decode_i_64(dynamic raw);
 
   @protected
+  PlatformInt64 dco_decode_isize(dynamic raw);
+
+  @protected
   KnownVault dco_decode_known_vault(dynamic raw);
 
   @protected
   List<String> dco_decode_list_String(dynamic raw);
+
+  @protected
+  List<CardSlotInfo> dco_decode_list_card_slot_info(dynamic raw);
 
   @protected
   List<EntryInfo> dco_decode_list_entry_info(dynamic raw);
@@ -201,6 +248,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ReleaseAsset? dco_decode_opt_box_autoadd_release_asset(dynamic raw);
+
+  @protected
+  int? dco_decode_opt_box_autoadd_u_8(dynamic raw);
 
   @protected
   UpdateInfo? dco_decode_opt_box_autoadd_update_info(dynamic raw);
@@ -263,6 +313,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
 
   @protected
+  CardReader
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCardReader(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   CreatedVault
   sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
     SseDeserializer deserializer,
@@ -287,6 +343,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  CardReader
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCardReader(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   CreatedVault
   sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
     SseDeserializer deserializer,
@@ -301,6 +363,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   VaultSession
   sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVaultSession(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  Object sse_decode_DartOpaque(SseDeserializer deserializer);
+
+  @protected
+  CardReader
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCardReader(
     SseDeserializer deserializer,
   );
 
@@ -372,7 +443,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  int sse_decode_box_autoadd_u_8(SseDeserializer deserializer);
+
+  @protected
   UpdateInfo sse_decode_box_autoadd_update_info(SseDeserializer deserializer);
+
+  @protected
+  CardInfo sse_decode_card_info(SseDeserializer deserializer);
+
+  @protected
+  CardSlotInfo sse_decode_card_slot_info(SseDeserializer deserializer);
 
   @protected
   CoreError sse_decode_core_error(SseDeserializer deserializer);
@@ -393,10 +473,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
 
   @protected
+  PlatformInt64 sse_decode_isize(SseDeserializer deserializer);
+
+  @protected
   KnownVault sse_decode_known_vault(SseDeserializer deserializer);
 
   @protected
   List<String> sse_decode_list_String(SseDeserializer deserializer);
+
+  @protected
+  List<CardSlotInfo> sse_decode_list_card_slot_info(
+    SseDeserializer deserializer,
+  );
 
   @protected
   List<EntryInfo> sse_decode_list_entry_info(SseDeserializer deserializer);
@@ -431,6 +519,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ReleaseAsset? sse_decode_opt_box_autoadd_release_asset(
     SseDeserializer deserializer,
   );
+
+  @protected
+  int? sse_decode_opt_box_autoadd_u_8(SseDeserializer deserializer);
 
   @protected
   UpdateInfo? sse_decode_opt_box_autoadd_update_info(
@@ -499,6 +590,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCardReader(
+    CardReader self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
   sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
     CreatedVault self,
     SseSerializer serializer,
@@ -527,6 +625,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCardReader(
+    CardReader self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
   sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
     CreatedVault self,
     SseSerializer serializer,
@@ -543,6 +648,23 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVaultSession(
     VaultSession self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_DartFn_Inputs_list_prim_u_8_strict_Output_list_prim_u_8_strict_AnyhowException(
+    FutureOr<Uint8List> Function(Uint8List) self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_DartOpaque(Object self, SseSerializer serializer);
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCardReader(
+    CardReader self,
     SseSerializer serializer,
   );
 
@@ -632,10 +754,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_u_8(int self, SseSerializer serializer);
+
+  @protected
   void sse_encode_box_autoadd_update_info(
     UpdateInfo self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_card_info(CardInfo self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_card_slot_info(CardSlotInfo self, SseSerializer serializer);
 
   @protected
   void sse_encode_core_error(CoreError self, SseSerializer serializer);
@@ -659,10 +790,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
 
   @protected
+  void sse_encode_isize(PlatformInt64 self, SseSerializer serializer);
+
+  @protected
   void sse_encode_known_vault(KnownVault self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_card_slot_info(
+    List<CardSlotInfo> self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_list_entry_info(
@@ -712,6 +852,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     ReleaseAsset? self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_opt_box_autoadd_u_8(int? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_update_info(
@@ -783,6 +926,22 @@ class RustLibWire implements BaseWire {
   RustLibWire.fromExternalLibrary(ExternalLibrary lib);
 
   void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCardReader(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCardReader(
+        ptr,
+      );
+
+  void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCardReader(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCardReader(
+        ptr,
+      );
+
+  void
   rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
     int ptr,
   ) => wasmModule
@@ -837,6 +996,16 @@ external RustLibWasmModule get wasmModule;
 @JS()
 @anonymous
 extension type RustLibWasmModule._(JSObject _) implements JSObject {
+  external void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCardReader(
+    int ptr,
+  );
+
+  external void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCardReader(
+    int ptr,
+  );
+
   external void
   rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
     int ptr,

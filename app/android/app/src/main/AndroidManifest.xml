@@ -1,6 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- In-app update checks and downloads. -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Contactless security cards (ISO/IEC 14443). Optional hardware. -->
+    <uses-permission android:name="android.permission.NFC"/>
+    <uses-feature android:name="android.hardware.nfc" android:required="false"/>
     <!-- Vaults can live in any folder, so Atropos asks for all-files access. -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="29"/>

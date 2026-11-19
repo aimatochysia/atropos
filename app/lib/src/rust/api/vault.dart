@@ -5,6 +5,7 @@
 
 import '../error.dart';
 import '../frb_generated.dart';
+import 'card.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
@@ -12,7 +13,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 import 'secure_input.dart';
 part 'vault.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `locked`, `outcome_info`, `parse_device`, `parse_id`, `parse_ids`, `parse_parent`, `progress_info`, `reporter`, `session`, `strong`, `vault_name`, `with`, `wrong_secret`
+// These functions are ignored because they are not marked as `pub`: `locked`, `outcome_info`, `parse_device`, `parse_id`, `parse_ids`, `parse_parent`, `progress_info`, `reporter`, `session_of`, `session`, `strong_session`, `strong`, `vault_name`, `with`, `wrong_secret`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `eq`, `fmt`
 
 /// Whether `path` is an Atropos vault folder.
@@ -110,6 +111,16 @@ abstract class CreatedVault implements RustOpaqueInterface {
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<VaultSession>>
 abstract class VaultSession implements RustOpaqueInterface {
+  /// Adds the card that `transmit` reaches. Checks the PIN and that the card
+  /// really computes the expected secret before the slot is saved.
+  Future<String> addCard({
+    required SecretInput pin,
+    required String name,
+    required FutureOr<Uint8List> Function(Uint8List) transmit,
+  });
+
+  Future<List<CardSlotInfo>> cards();
+
   Future<void> changePassword({required SecretInput newPassword});
 
   Future<String> createFolder({String? parent, required String name});
@@ -174,6 +185,8 @@ abstract class VaultSession implements RustOpaqueInterface {
   });
 
   String get path;
+
+  Future<void> removeCard({required String id});
 
   Future<void> removeDevice({required String deviceId});
 

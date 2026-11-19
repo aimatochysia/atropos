@@ -7,6 +7,7 @@ import '../core/format.dart';
 import '../core/platform_files.dart';
 import '../src/rust/api/vault.dart';
 import '../state/app_controller.dart';
+import 'card_flows.dart';
 import 'package_flows.dart';
 import 'recovery_page.dart';
 import 'secret_dialog.dart';
@@ -686,6 +687,11 @@ class _VaultPageState extends State<VaultPage> {
                       'password' => _changePassword(),
                       'recovery' => _newRecovery(),
                       'biometric' => _biometricSettings(),
+                      'cards' => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => CardsPage(session: _s),
+                        ),
+                      ),
                       'package' => openPackageIntoVault(
                         context,
                         _s,
@@ -710,6 +716,10 @@ class _VaultPageState extends State<VaultPage> {
                       PopupMenuItem(
                         value: 'biometric',
                         child: Text('Fingerprint unlock'),
+                      ),
+                      PopupMenuItem(
+                        value: 'cards',
+                        child: Text('Security cards'),
                       ),
                     ],
                   ),

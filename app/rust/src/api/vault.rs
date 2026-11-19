@@ -185,6 +185,17 @@ pub fn create_vault(
 }
 
 /// Renews this device's biometric unlock for 24 hours after a strong unlock.
+pub(crate) fn strong_session(v: Vault, device_id: Option<String>) -> VaultSession {
+    strong(v, device_id)
+}
+
+pub(crate) fn session_of<T>(
+    s: &VaultSession,
+    f: impl FnOnce(&mut Vault) -> CoreResult<T>,
+) -> CoreResult<T> {
+    s.with(f)
+}
+
 fn strong(mut v: Vault, device_id: Option<String>) -> VaultSession {
     if let Some(d) = device_id.and_then(|d| hex::decode(d).ok()) {
         let _ = v.renew_device(&d);

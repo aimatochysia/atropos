@@ -5,6 +5,7 @@ import 'package:atropos/app.dart';
 import 'package:atropos/core/biometrics.dart';
 import 'package:atropos/core/crypto_service.dart';
 import 'package:atropos/core/platform_files.dart';
+import 'package:atropos/src/rust/api/card.dart' as card;
 import 'package:atropos/src/rust/api/secure_input.dart';
 import 'package:atropos/src/rust/api/vault.dart';
 import 'package:atropos/src/rust/frb_generated.dart';
@@ -168,6 +169,39 @@ void main() {
     );
     expect(File('${ex.path}/photos/big.bin').lengthSync(), 300 * 1024);
     await s.lock();
+  });
+
+  testWidgets('card calls reach Dart for every APDU', (tester) async {
+    // A "card" with neither applet: every SELECT is refused.
+    final seen = <Uint8List>[];
+    await expectLater(
+      card.cardStatus(
+        transmit: (apdu) {
+          seen.add(apdu);
+          return Uint8List.fromList([0x6A, 0x82]);
+        },
+      ),
+      throwsA(
+        predicate((e) => e.toString().contains('no OpenPGP or PIV applet')),
+      ),
+    );
+    expect(seen.length, 2);
+    expect(seen.first.sublist(0, 4), [0x00, 0xA4, 0x04, 0x00]);
+    final dir = '${tmp.path}/c';
+    final created = await createVault(
+      parentDir: tmp.path,
+      name: 'c',
+      password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+    );
+    expect(await card.vaultCardCount(path: dir), 0);
+    expect(await created.session.cards(), isEmpty);
+    await created.session.lock();
+    // A reader-less desktop answers with a readable error or an empty list.
+    try {
+      expect(await card.cardReaders(), isA<List<String>>());
+    } catch (e) {
+      expect(e.toString(), isNotEmpty);
+    }
   });
 
   testWidgets('create and unlock a vault with the keypad', (tester) async {

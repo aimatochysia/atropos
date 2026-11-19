@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../core/biometrics.dart';
 import '../core/errors.dart';
+import '../src/rust/api/card.dart' as cards;
 import '../src/rust/api/vault.dart' as core;
+import 'card_flows.dart';
 import '../state/app_controller.dart';
 import 'secret_dialog.dart';
 import 'secret_field.dart';
@@ -28,11 +30,26 @@ class _UnlockPageState extends State<UnlockPage> {
 
   /// Set when this vault has fingerprint unlock on this device.
   String? _bioVaultId;
+  int _cards = 0;
 
   @override
   void initState() {
     super.initState();
+    cards.vaultCardCount(path: widget.path).then((n) {
+      if (mounted) setState(() => _cards = n);
+    }, onError: (_) {});
     _checkBiometrics();
+  }
+
+  Future<void> _unlockWithCard() async {
+    setState(() => _error = null);
+    final session = await unlockWithCardFlow(
+      context,
+      path: widget.path,
+      name: widget.name,
+    );
+    if (session == null || !mounted) return;
+    await _opened(session, usedRecovery: false);
   }
 
   Future<void> _checkBiometrics() async {
@@ -214,6 +231,15 @@ class _UnlockPageState extends State<UnlockPage> {
                 : const Icon(Icons.lock_open),
             label: Text(_busy ? 'Unlocking…' : 'Unlock'),
           ),
+          if (_cards > 0) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              key: const Key('unlock-card'),
+              onPressed: _busy ? null : _unlockWithCard,
+              icon: const Icon(Icons.credit_card),
+              label: const Text('Use security card'),
+            ),
+          ],
           if (_bioVaultId != null) ...[
             const SizedBox(height: 8),
             OutlinedButton.icon(
