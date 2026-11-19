@@ -28,7 +28,13 @@ const BUNDLE_LEN: usize = MLKEM_SECRET_LEN + P384_SECRET_LEN + ROOT_LEN;
 pub enum SlotKind {
     Password,
     Recovery,
+    /// A secret held by one device's hardware keystore behind biometrics.
+    Device,
 }
+
+/// How long a device (biometric) slot works after the last unlock with the
+/// password or recovery phrase on that device.
+pub const DEVICE_TTL_SECS: i64 = 24 * 3600;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CostJson {
@@ -70,6 +76,25 @@ pub struct Slot {
     pub nonce: Vec<u8>,
     #[serde(with = "super::b64")]
     pub wrapped: Vec<u8>,
+    /// Device slots: which installation holds the secret.
+    #[serde(
+        with = "super::b64::opt",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    pub device: Option<Vec<u8>>,
+    /// Device slots: a name to show, such as the phone model.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub label: Option<String>,
+    /// Device slots: Unix time after which the slot refuses to open. Not part
+    /// of the slot's associated data (it changes without re-wrapping) but
+    /// covered by the header MAC, which is checked before the slot is used.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub expires: Option<i64>,
+    /// Device slots: when the expiry was last renewed, to spot a clock that
+    /// was turned back.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub renewed: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -149,27 +174,40 @@ impl VaultSecrets {
 pub enum Unlock<'a> {
     Password(&'a [u8]),
     Recovery(&'a [u8; 32]),
+    Device {
+        device: &'a [u8],
+        secret: &'a [u8; 32],
+    },
 }
 
-fn slot_aad(body: &HeaderBody, id: &[u8], kind: SlotKind) -> Vec<u8> {
+impl Unlock<'_> {
+    /// Password and recovery phrase prove the person knows the vault's
+    /// secrets; a device slot only proves they hold this device.
+    pub fn is_strong(&self) -> bool {
+        !matches!(self, Unlock::Device { .. })
+    }
+}
+
+fn slot_aad(body: &HeaderBody, slot: &Slot) -> Vec<u8> {
     let pk_hash = sha384(&[&body.public_key.mlkem, &body.public_key.p384]);
     let mut aad = b"atropos/slot/v1".to_vec();
     aad.extend_from_slice(&body.vault_id);
-    aad.extend_from_slice(id);
-    aad.push(match kind {
+    aad.extend_from_slice(&slot.id);
+    aad.push(match slot.kind {
         SlotKind::Password => 1,
         SlotKind::Recovery => 2,
+        SlotKind::Device => 3,
     });
     aad.extend_from_slice(&pk_hash);
+    if let Some(d) = &slot.device {
+        aad.extend_from_slice(b"device");
+        aad.extend_from_slice(d);
+    }
     aad
 }
 
-fn slot_key(
-    kind: SlotKind,
-    salt: &[u8],
-    cost: Option<CostJson>,
-    how: &Unlock,
-) -> CoreResult<Option<Zeroizing<[u8; 32]>>> {
+fn slot_key(slot: &Slot, how: &Unlock) -> CoreResult<Option<Zeroizing<[u8; 32]>>> {
+    let (kind, salt, cost) = (slot.kind, slot.salt.as_slice(), slot.argon2);
     match (kind, how) {
         (SlotKind::Password, Unlock::Password(pw)) => {
             let salt: [u8; password::SALT_LEN] =
@@ -182,6 +220,15 @@ fn slot_key(
             k.as_ref(),
             &[b"atropos/slot/recovery/v1"],
         )?)),
+        (SlotKind::Device, Unlock::Device { device, secret })
+            if slot.device.as_deref() == Some(*device) =>
+        {
+            Ok(Some(derive_key(
+                salt,
+                secret.as_ref(),
+                &[b"atropos/slot/device/v1"],
+            )?))
+        }
         _ => Ok(None),
     }
 }
@@ -214,33 +261,68 @@ impl HeaderBody {
         how: &Unlock,
         cost: Argon2Cost,
     ) -> CoreResult<()> {
-        let (kind, salt, argon2) = match how {
+        let (kind, salt, argon2, device) = match how {
             Unlock::Password(_) => (
                 SlotKind::Password,
                 random_array::<{ password::SALT_LEN }>()?.to_vec(),
                 Some(CostJson::from(cost)),
+                None,
             ),
-            Unlock::Recovery(_) => (SlotKind::Recovery, random_array::<32>()?.to_vec(), None),
+            Unlock::Recovery(_) => (
+                SlotKind::Recovery,
+                random_array::<32>()?.to_vec(),
+                None,
+                None,
+            ),
+            Unlock::Device { device, .. } => (
+                SlotKind::Device,
+                random_array::<32>()?.to_vec(),
+                None,
+                Some(device.to_vec()),
+            ),
         };
-        let key = slot_key(kind, &salt, argon2, how)?.ok_or(CoreError::Crypto)?;
-        let id = random_array::<8>()?.to_vec();
-        let nonce = random_array::<12>()?;
-        let aad = slot_aad(self, &id, kind);
-        let wrapped = AeadKey::new(&key)?.seal(&nonce, &aad, &secrets.bundle())?;
-        self.slots.push(Slot {
-            id,
+        let mut slot = Slot {
+            id: random_array::<8>()?.to_vec(),
             kind,
             argon2,
             salt,
-            nonce: nonce.to_vec(),
-            wrapped,
-        });
+            nonce: Vec::new(),
+            wrapped: Vec::new(),
+            device,
+            label: None,
+            expires: None,
+            renewed: None,
+        };
+        let key = slot_key(&slot, how)?.ok_or(CoreError::Crypto)?;
+        let nonce = random_array::<12>()?;
+        let aad = slot_aad(self, &slot);
+        slot.wrapped = AeadKey::new(&key)?.seal(&nonce, &aad, &secrets.bundle())?;
+        slot.nonce = nonce.to_vec();
+        self.slots.push(slot);
         Ok(())
     }
 
     /// Removes every slot of `kind`.
     pub fn remove_slots(&mut self, kind: SlotKind) {
         self.slots.retain(|s| s.kind != kind);
+    }
+
+    /// Removes the device slot of `device`, if any.
+    pub fn remove_device(&mut self, device: &[u8]) {
+        self.slots
+            .retain(|s| !(s.kind == SlotKind::Device && s.device.as_deref() == Some(device)));
+    }
+
+    pub fn device_slot_mut(&mut self, device: &[u8]) -> Option<&mut Slot> {
+        self.slots
+            .iter_mut()
+            .find(|s| s.kind == SlotKind::Device && s.device.as_deref() == Some(device))
+    }
+
+    pub fn device_slot(&self, device: &[u8]) -> Option<&Slot> {
+        self.slots
+            .iter()
+            .find(|s| s.kind == SlotKind::Device && s.device.as_deref() == Some(device))
     }
 
     /// Tries each slot that matches `how`. Returns the secrets and the index of
@@ -251,7 +333,7 @@ impl HeaderBody {
             if let Some(cost) = slot.argon2 {
                 Argon2Cost::from(cost).validate()?;
             }
-            let Some(key) = slot_key(slot.kind, &slot.salt, slot.argon2, how)? else {
+            let Some(key) = slot_key(slot, how)? else {
                 continue;
             };
             let nonce: [u8; 12] = slot
@@ -259,7 +341,7 @@ impl HeaderBody {
                 .as_slice()
                 .try_into()
                 .map_err(|_| CoreError::DecryptFailed)?;
-            let aad = slot_aad(self, &slot.id, slot.kind);
+            let aad = slot_aad(self, slot);
             if let Ok(mut bundle) = AeadKey::new(&key)?.open(&nonce, &aad, &slot.wrapped) {
                 let secrets = VaultSecrets::from_bundle(&bundle, public)?;
                 bundle.zeroize();
@@ -273,9 +355,9 @@ impl HeaderBody {
     /// blob changes on every unlock.
     pub fn reseal(&mut self, index: usize, secrets: &VaultSecrets, how: &Unlock) -> CoreResult<()> {
         let slot = self.slots.get(index).ok_or(CoreError::Crypto)?.clone();
-        let key = slot_key(slot.kind, &slot.salt, slot.argon2, how)?.ok_or(CoreError::Crypto)?;
+        let key = slot_key(&slot, how)?.ok_or(CoreError::Crypto)?;
         let nonce = random_array::<12>()?;
-        let aad = slot_aad(self, &slot.id, slot.kind);
+        let aad = slot_aad(self, &slot);
         let wrapped = AeadKey::new(&key)?.seal(&nonce, &aad, &secrets.bundle())?;
         let s = &mut self.slots[index];
         s.nonce = nonce.to_vec();

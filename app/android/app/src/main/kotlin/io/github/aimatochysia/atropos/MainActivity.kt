@@ -12,17 +12,18 @@ import android.provider.Settings
 import android.view.WindowManager
 import java.io.File
 import androidx.core.content.FileProvider
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.Result
 
 /**
- * Blocks screenshots and the recents thumbnail, exposes the "All files access"
+ * Blocks screenshots and the recents thumbnail, offers biometric unlock
+ * (see [BiometricVault]), exposes the "All files access"
  * permission to Dart (vaults can live in any folder) and hands verified update
  * APKs to the system installer.
  */
-class MainActivity : FlutterActivity() {
+class MainActivity : FlutterFragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         // Decrypted content must never end up in screenshots, screen
         // recordings or the recent-apps preview.
@@ -60,6 +61,9 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+        val biometric = BiometricVault(this)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "atropos/biometric")
+            .setMethodCallHandler { call, result -> biometric.handle(call, result) }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "atropos/install")
             .setMethodCallHandler { call, result ->
                 when (call.method) {

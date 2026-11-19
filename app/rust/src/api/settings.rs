@@ -84,6 +84,22 @@ pub fn remember_vault(config_dir: String, path: String) -> CoreResult<()> {
     write(&config_dir, VAULTS, &v)
 }
 
+/// A random id for this installation, made on first use. Biometric key
+/// slots in vault headers name the device they belong to with it.
+pub fn device_id(config_dir: String) -> CoreResult<String> {
+    let path = Path::new(&config_dir).join("device-id");
+    if let Ok(s) = fs::read_to_string(&path) {
+        let s = s.trim();
+        if s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Ok(s.to_string());
+        }
+    }
+    fs::create_dir_all(&config_dir)?;
+    let id = hex::encode(crate::crypto::random_array::<16>()?);
+    crate::vault::manifest::write_atomic(&path, &[id.as_bytes()])?;
+    Ok(id)
+}
+
 /// Removes a vault from the list; its files are not touched.
 pub fn forget_vault(config_dir: String, path: String) -> CoreResult<()> {
     let mut v: Vec<KnownVault> = read(&config_dir, VAULTS);

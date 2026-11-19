@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
+import '../core/biometrics.dart';
 import '../core/format.dart';
 import '../core/platform_files.dart';
 import '../src/rust/api/vault.dart';
@@ -483,6 +486,96 @@ class _VaultPageState extends State<VaultPage> {
     );
   }
 
+  /// Turns fingerprint/face unlock for this vault on this device on or off.
+  Future<void> _biometricSettings() async {
+    final app = AppScope.read(context);
+    final device = app.deviceId;
+    final status = await app.biometrics.status();
+    if (!mounted) return;
+    if (device == null || status == BiometricStatus.unavailable) {
+      await confirm(
+        context,
+        title: 'Fingerprint unlock',
+        message:
+            'This device has no strong fingerprint or face sensor that '
+            'Atropos can use. On Android it needs a class 3 (strong) '
+            'biometric. Windows Hello and Touch ID come in a later version.',
+      );
+      return;
+    }
+    if (status == BiometricStatus.noneEnrolled) {
+      await confirm(
+        context,
+        title: 'Fingerprint unlock',
+        message:
+            'Add a fingerprint or face in the system settings first, then '
+            'come back here.',
+      );
+      return;
+    }
+    final vaultId = _s.vaultId;
+    final expires = await guarded(
+      context,
+      () => _s.deviceExpires(deviceId: device),
+    );
+    final on = expires != null && await app.biometrics.has(vaultId);
+    if (!mounted) return;
+    if (on) {
+      final off = await confirm(
+        context,
+        title: 'Fingerprint unlock is on',
+        message:
+            'It works until ${_when(expires)}. Every unlock with the password '
+            'or recovery phrase on this device extends it by 24 hours.\n\n'
+            'Turn it off for this vault?',
+        action: 'Turn off',
+        destructive: true,
+      );
+      if (!off || !mounted) return;
+      await guarded(context, () async {
+        await _s.removeDevice(deviceId: device);
+        await app.biometrics.remove(vaultId);
+      }, success: (_) => 'Fingerprint unlock is off for this vault.');
+      return;
+    }
+    final go = await confirm(
+      context,
+      title: 'Turn on fingerprint unlock?',
+      message:
+          'Your fingerprint or face then opens this vault on this device. '
+          'The key lives in the phone\'s secure hardware and never leaves it; '
+          'the vault folder only gets a slot that this device can open.\n\n'
+          'For safety the password (or recovery phrase) is needed again '
+          'after 24 hours, and adding a new fingerprint to the phone turns '
+          'this off.',
+      action: 'Turn on',
+    );
+    if (!go || !mounted) return;
+    await guarded(context, () async {
+      final secret = await _s.enrollDevice(
+        deviceId: device,
+        label: Platform.localHostname,
+      );
+      bool ok;
+      try {
+        ok = await app.biometrics.enroll(vaultId, secret);
+      } catch (_) {
+        await _s.removeDevice(deviceId: device);
+        rethrow;
+      } finally {
+        secret.fillRange(0, secret.length, 0);
+      }
+      if (!ok) await _s.removeDevice(deviceId: device);
+      return ok;
+    }, success: (ok) => ok ? 'Fingerprint unlock is on.' : 'Cancelled.');
+  }
+
+  static String _when(int unix) {
+    final t = DateTime.fromMillisecondsSinceEpoch(unix * 1000);
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
+  }
+
   Future<void> _info() async {
     final t = await guarded(context, _s.totals);
     if (t == null || !mounted) return;
@@ -592,6 +685,7 @@ class _VaultPageState extends State<VaultPage> {
                       'info' => _info(),
                       'password' => _changePassword(),
                       'recovery' => _newRecovery(),
+                      'biometric' => _biometricSettings(),
                       'package' => openPackageIntoVault(
                         context,
                         _s,
@@ -612,6 +706,10 @@ class _VaultPageState extends State<VaultPage> {
                       PopupMenuItem(
                         value: 'recovery',
                         child: Text('New recovery phrase'),
+                      ),
+                      PopupMenuItem(
+                        value: 'biometric',
+                        child: Text('Fingerprint unlock'),
                       ),
                     ],
                   ),

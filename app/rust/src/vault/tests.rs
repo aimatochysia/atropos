@@ -169,3 +169,104 @@ fn walk(p: &Path) -> Vec<PathBuf> {
     }
     v
 }
+
+fn edit_device_slot(path: &Path, f: impl FnOnce(&mut header::Slot)) {
+    let mut h = read_header(path).unwrap();
+    let s = h
+        .body
+        .slots
+        .iter_mut()
+        .find(|s| s.kind == SlotKind::Device)
+        .unwrap();
+    f(s);
+    fs::write(path.join(HEADER_FILE), h.to_bytes().unwrap()).unwrap();
+}
+
+#[test]
+fn device_slot_unlocks_until_it_expires() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("v");
+    let (mut v, _) = Vault::create(&path, PW, fast()).unwrap();
+    let dev = b"tablet-1";
+    let secret = v.enroll_device(dev, "Tablet").unwrap();
+    assert!(v.device_expires(dev).unwrap() > now() + DEVICE_TTL_SECS - 60);
+    drop(v);
+
+    let how = Unlock::Device {
+        device: dev,
+        secret: &secret,
+    };
+    let v = Vault::unlock(&path, &how).unwrap();
+    drop(v);
+    // Wrong device id or secret fails.
+    assert!(Vault::unlock(
+        &path,
+        &Unlock::Device {
+            device: b"other",
+            secret: &secret
+        }
+    )
+    .is_err());
+    assert!(Vault::unlock(
+        &path,
+        &Unlock::Device {
+            device: dev,
+            secret: &[7u8; 32]
+        }
+    )
+    .is_err());
+
+    // Expired: refused, and editing the expiry by hand breaks the header MAC.
+    let (h_before, _) = (read_header(&path).unwrap(), ());
+    let expires = h_before.body.device_slot(dev).unwrap().expires.unwrap();
+    edit_device_slot(&path, |s| s.expires = Some(now() - 10));
+    // The MAC no longer matches, so the edit itself is caught.
+    assert!(Vault::unlock(&path, &how).is_err());
+    edit_device_slot(&path, |s| s.expires = Some(expires));
+    // Restoring the exact value makes the header valid again.
+    Vault::unlock(&path, &how).unwrap();
+
+    // A password unlock renews; removing the device turns it off.
+    let mut v = Vault::unlock(&path, &Unlock::Password(PW)).unwrap();
+    v.renew_device(dev).unwrap();
+    v.remove_device(dev).unwrap();
+    assert!(v.device_expires(dev).is_none());
+    drop(v);
+    assert!(Vault::unlock(&path, &how).is_err());
+}
+
+#[test]
+fn expired_device_slot_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("v");
+    let (mut v, _) = Vault::create(&path, PW, fast()).unwrap();
+    let dev = b"phone";
+    let secret = v.enroll_device(dev, "Phone").unwrap();
+    // Expire it the legitimate way: through the vault, so the MAC is right.
+    let mut body = v.header.body.clone();
+    body.device_slot_mut(dev).unwrap().expires = Some(now() - 1);
+    v.save_header(body).unwrap();
+    drop(v);
+    let err = Vault::unlock(
+        &path,
+        &Unlock::Device {
+            device: dev,
+            secret: &secret,
+        },
+    )
+    .err()
+    .unwrap();
+    assert!(format!("{err:?}").contains("expired"));
+    // Password still works and renews it.
+    let mut v = Vault::unlock(&path, &Unlock::Password(PW)).unwrap();
+    v.renew_device(dev).unwrap();
+    drop(v);
+    Vault::unlock(
+        &path,
+        &Unlock::Device {
+            device: dev,
+            secret: &secret,
+        },
+    )
+    .unwrap();
+}

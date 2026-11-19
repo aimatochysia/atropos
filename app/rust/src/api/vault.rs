@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use flutter_rust_bridge::frb;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::secure_input::SecretInput;
 use crate::crypto::password::Argon2Cost;
@@ -38,6 +39,8 @@ pub struct VaultInfo {
     pub path: String,
     pub name: String,
     pub created: i64,
+    /// Hex; names this vault's biometric key in the platform keystore.
+    pub vault_id: String,
 }
 
 pub struct ProgressInfo {
@@ -138,6 +141,7 @@ pub fn inspect_vault(path: String) -> CoreResult<VaultInfo> {
         name: vault_name(&p),
         path,
         created: h.body.created,
+        vault_id: hex::encode(&h.body.vault_id),
     })
 }
 
@@ -148,6 +152,7 @@ pub fn inspect_vault(path: String) -> CoreResult<VaultInfo> {
 pub struct VaultSession {
     inner: Arc<Mutex<Option<Vault>>>,
     path: String,
+    vault_id: String,
 }
 
 pub struct CreatedVault {
@@ -159,6 +164,7 @@ pub struct CreatedVault {
 fn session(v: Vault) -> VaultSession {
     VaultSession {
         path: path_to_string(v.path()),
+        vault_id: hex::encode(v.vault_id()),
         inner: Arc::new(Mutex::new(Some(v))),
     }
 }
@@ -178,18 +184,76 @@ pub fn create_vault(
     })
 }
 
-pub fn unlock_with_password(path: String, password: &SecretInput) -> CoreResult<VaultSession> {
+/// Renews this device's biometric unlock for 24 hours after a strong unlock.
+fn strong(mut v: Vault, device_id: Option<String>) -> VaultSession {
+    if let Some(d) = device_id.and_then(|d| hex::decode(d).ok()) {
+        let _ = v.renew_device(&d);
+    }
+    session(v)
+}
+
+/// `device_id` (from `device_id()`) renews biometric unlock on this device.
+pub fn unlock_with_password(
+    path: String,
+    password: &SecretInput,
+    device_id: Option<String>,
+) -> CoreResult<VaultSession> {
     let pw = password.bytes();
     Vault::unlock(Path::new(&path), &Unlock::Password(&pw))
-        .map(session)
+        .map(|v| strong(v, device_id))
         .map_err(wrong_secret)
 }
 
-pub fn unlock_with_recovery_phrase(path: String, phrase: &SecretInput) -> CoreResult<VaultSession> {
+pub fn unlock_with_recovery_phrase(
+    path: String,
+    phrase: &SecretInput,
+    device_id: Option<String>,
+) -> CoreResult<VaultSession> {
     let key = recovery::from_phrase(&phrase.text())?;
     Vault::unlock(Path::new(&path), &Unlock::Recovery(&key))
-        .map(session)
+        .map(|v| strong(v, device_id))
         .map_err(wrong_secret)
+}
+
+/// Unlocks with the secret the platform keystore released after a
+/// biometric check. `secret` is wiped here.
+pub fn unlock_with_device(
+    path: String,
+    device_id: String,
+    mut secret: Vec<u8>,
+) -> CoreResult<VaultSession> {
+    let device = hex::decode(&device_id).map_err(|_| CoreError::InvalidInput {
+        message: "bad device id".into(),
+    })?;
+    let key: Zeroizing<[u8; 32]> = Zeroizing::new(
+        secret
+            .as_slice()
+            .try_into()
+            .map_err(|_| CoreError::DecryptFailed)?,
+    );
+    secret.zeroize();
+    Vault::unlock(
+        Path::new(&path),
+        &Unlock::Device {
+            device: &device,
+            secret: &key,
+        },
+    )
+    .map(session)
+    .map_err(|e| match e {
+        CoreError::DecryptFailed => CoreError::InvalidInput {
+            message: "fingerprint unlock is no longer set up for this vault on this \
+                      device; unlock with the password"
+                .into(),
+        },
+        e => e,
+    })
+}
+
+fn parse_device(id: &str) -> CoreResult<Vec<u8>> {
+    hex::decode(id).map_err(|_| CoreError::InvalidInput {
+        message: "bad device id".into(),
+    })
 }
 
 fn wrong_secret(e: CoreError) -> CoreError {
@@ -360,6 +424,31 @@ impl VaultSession {
     pub fn change_password(&self, new_password: &SecretInput) -> CoreResult<()> {
         let pw = new_password.bytes();
         self.with(|v| v.change_password(&pw, Argon2Cost::DEFAULT))
+    }
+
+    /// Hex id of the vault (same as `VaultInfo.vault_id`).
+    #[frb(sync, getter)]
+    pub fn vault_id(&self) -> String {
+        self.vault_id.clone()
+    }
+
+    /// Turns on biometric unlock for this device. Returns the 32-byte secret
+    /// the platform keystore must protect; the caller wipes it after use.
+    pub fn enroll_device(&self, device_id: String, label: String) -> CoreResult<Vec<u8>> {
+        let device = parse_device(&device_id)?;
+        self.with(|v| v.enroll_device(&device, &label).map(|s| s.to_vec()))
+    }
+
+    pub fn remove_device(&self, device_id: String) -> CoreResult<()> {
+        let device = parse_device(&device_id)?;
+        self.with(|v| v.remove_device(&device))
+    }
+
+    /// When biometric unlock on this device stops working (Unix seconds), or
+    /// None when it is off.
+    pub fn device_expires(&self, device_id: String) -> CoreResult<Option<i64>> {
+        let device = parse_device(&device_id)?;
+        self.with(|v| Ok(v.device_expires(&device)))
     }
 
     /// Replaces the recovery key; the old phrase stops working.
