@@ -13,8 +13,8 @@ use crate::error::{CoreError, CoreResult};
 use crate::frb_generated::StreamSink;
 
 /// The release-signing public key (also in `packaging/atropos-update.pub`).
-const UPDATE_PUBLIC_KEY: &str = "untrusted comment: minisign public key 64E4889CCC838D81
-RWSBjYPMnIjkZPFetXOBweP5Gc562r1IZL7HSjBJwXtpo56s344T08tr
+const UPDATE_PUBLIC_KEY: &str = "untrusted comment: minisign public key 300065C7CB9EC9A4
+RWSkyZ7Lx2UAMCjaoYGd9CQpDHZzhQzwq3j6QhG2WOdClTlhdnLAMz38
 ";
 
 const RELEASES_API: &str = "https://api.github.com/repos/aimatochysia/atropos/releases";
