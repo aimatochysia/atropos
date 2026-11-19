@@ -25,6 +25,11 @@ aws-lc-rs = { version = "1.19", features = ["prebuilt-nasm"] }
 argon2 = { version = "0.5", features = ["zeroize"] }
 zeroize = { version = "1.8", features = ["derive"] }
 subtle = "2.6"
+base64 = "0.22"
+hex = "0.4"
+bip39 = { version = "2", default-features = false, features = ["std", "zeroize"] }
+zxcvbn = "3"
+filetime = "0.2"
 
 [dev-dependencies]
 minisign = "0.10.0"

@@ -7,8 +7,11 @@
 // ignore_for_file: argument_type_not_assignable
 
 import 'api/app.dart';
+import 'api/secure_input.dart';
 import 'api/selftest.dart';
+import 'api/settings.dart';
 import 'api/update.dart';
+import 'api/vault.dart';
 
 import 'dart:async';
 import 'dart:convert';
@@ -26,8 +29,80 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     required super.portManager,
   });
 
+  CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_CreatedVaultPtr => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault;
+
+  CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_SecretInputPtr => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput;
+
+  CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_VaultSessionPtr => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVaultSession;
+
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw);
+
+  @protected
+  CreatedVault
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    dynamic raw,
+  );
+
+  @protected
+  SecretInput
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+    dynamic raw,
+  );
+
+  @protected
+  VaultSession
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVaultSession(
+    dynamic raw,
+  );
+
+  @protected
+  CreatedVault
+  dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    dynamic raw,
+  );
+
+  @protected
+  CreatedVault
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    dynamic raw,
+  );
+
+  @protected
+  SecretInput
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+    dynamic raw,
+  );
+
+  @protected
+  VaultSession
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVaultSession(
+    dynamic raw,
+  );
+
+  @protected
+  CreatedVault
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    dynamic raw,
+  );
+
+  @protected
+  SecretInput
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+    dynamic raw,
+  );
+
+  @protected
+  VaultSession
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVaultSession(
+    dynamic raw,
+  );
 
   @protected
   RustStreamSink<DownloadProgress> dco_decode_StreamSink_download_progress_Sse(
@@ -35,13 +110,34 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<TaskEvent> dco_decode_StreamSink_task_event_Sse(dynamic raw);
+
+  @protected
   String dco_decode_String(dynamic raw);
+
+  @protected
+  AppSettings dco_decode_app_settings(dynamic raw);
 
   @protected
   bool dco_decode_bool(dynamic raw);
 
   @protected
+  SecretInput
+  dco_decode_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+    dynamic raw,
+  );
+
+  @protected
+  AppSettings dco_decode_box_autoadd_app_settings(dynamic raw);
+
+  @protected
+  OutcomeInfo dco_decode_box_autoadd_outcome_info(dynamic raw);
+
+  @protected
   PlatformInfo dco_decode_box_autoadd_platform_info(dynamic raw);
+
+  @protected
+  ProgressInfo dco_decode_box_autoadd_progress_info(dynamic raw);
 
   @protected
   ReleaseAsset dco_decode_box_autoadd_release_asset(dynamic raw);
@@ -56,7 +152,28 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   DownloadProgress dco_decode_download_progress(dynamic raw);
 
   @protected
+  EntryInfo dco_decode_entry_info(dynamic raw);
+
+  @protected
+  EntryKind dco_decode_entry_kind(dynamic raw);
+
+  @protected
   int dco_decode_i_32(dynamic raw);
+
+  @protected
+  PlatformInt64 dco_decode_i_64(dynamic raw);
+
+  @protected
+  KnownVault dco_decode_known_vault(dynamic raw);
+
+  @protected
+  List<String> dco_decode_list_String(dynamic raw);
+
+  @protected
+  List<EntryInfo> dco_decode_list_entry_info(dynamic raw);
+
+  @protected
+  List<KnownVault> dco_decode_list_known_vault(dynamic raw);
 
   @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
@@ -68,16 +185,31 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
+  SecretInput?
+  dco_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+    dynamic raw,
+  );
+
+  @protected
   ReleaseAsset? dco_decode_opt_box_autoadd_release_asset(dynamic raw);
 
   @protected
   UpdateInfo? dco_decode_opt_box_autoadd_update_info(dynamic raw);
 
   @protected
+  OutcomeInfo dco_decode_outcome_info(dynamic raw);
+
+  @protected
+  PackageInfo dco_decode_package_info(dynamic raw);
+
+  @protected
   PackageKind dco_decode_package_kind(dynamic raw);
 
   @protected
   PlatformInfo dco_decode_platform_info(dynamic raw);
+
+  @protected
+  ProgressInfo dco_decode_progress_info(dynamic raw);
 
   @protected
   ReleaseAsset dco_decode_release_asset(dynamic raw);
@@ -89,7 +221,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SelfTestStep dco_decode_self_test_step(dynamic raw);
 
   @protected
+  Strength dco_decode_strength(dynamic raw);
+
+  @protected
+  TaskEvent dco_decode_task_event(dynamic raw);
+
+  @protected
   int dco_decode_u_16(dynamic raw);
+
+  @protected
+  int dco_decode_u_32(dynamic raw);
 
   @protected
   BigInt dco_decode_u_64(dynamic raw);
@@ -104,7 +245,73 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   UpdateInfo dco_decode_update_info(dynamic raw);
 
   @protected
+  BigInt dco_decode_usize(dynamic raw);
+
+  @protected
+  VaultInfo dco_decode_vault_info(dynamic raw);
+
+  @protected
   AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
+
+  @protected
+  CreatedVault
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  SecretInput
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  VaultSession
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVaultSession(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  CreatedVault
+  sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  CreatedVault
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  SecretInput
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  VaultSession
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVaultSession(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  CreatedVault
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  SecretInput
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  VaultSession
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVaultSession(
+    SseDeserializer deserializer,
+  );
 
   @protected
   RustStreamSink<DownloadProgress> sse_decode_StreamSink_download_progress_Sse(
@@ -112,13 +319,38 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<TaskEvent> sse_decode_StreamSink_task_event_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   String sse_decode_String(SseDeserializer deserializer);
+
+  @protected
+  AppSettings sse_decode_app_settings(SseDeserializer deserializer);
 
   @protected
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
+  SecretInput
+  sse_decode_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  AppSettings sse_decode_box_autoadd_app_settings(SseDeserializer deserializer);
+
+  @protected
+  OutcomeInfo sse_decode_box_autoadd_outcome_info(SseDeserializer deserializer);
+
+  @protected
   PlatformInfo sse_decode_box_autoadd_platform_info(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ProgressInfo sse_decode_box_autoadd_progress_info(
     SseDeserializer deserializer,
   );
 
@@ -137,7 +369,28 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   DownloadProgress sse_decode_download_progress(SseDeserializer deserializer);
 
   @protected
+  EntryInfo sse_decode_entry_info(SseDeserializer deserializer);
+
+  @protected
+  EntryKind sse_decode_entry_kind(SseDeserializer deserializer);
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer);
+
+  @protected
+  PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
+
+  @protected
+  KnownVault sse_decode_known_vault(SseDeserializer deserializer);
+
+  @protected
+  List<String> sse_decode_list_String(SseDeserializer deserializer);
+
+  @protected
+  List<EntryInfo> sse_decode_list_entry_info(SseDeserializer deserializer);
+
+  @protected
+  List<KnownVault> sse_decode_list_known_vault(SseDeserializer deserializer);
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
@@ -151,6 +404,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
+  SecretInput?
+  sse_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   ReleaseAsset? sse_decode_opt_box_autoadd_release_asset(
     SseDeserializer deserializer,
   );
@@ -161,10 +420,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  OutcomeInfo sse_decode_outcome_info(SseDeserializer deserializer);
+
+  @protected
+  PackageInfo sse_decode_package_info(SseDeserializer deserializer);
+
+  @protected
   PackageKind sse_decode_package_kind(SseDeserializer deserializer);
 
   @protected
   PlatformInfo sse_decode_platform_info(SseDeserializer deserializer);
+
+  @protected
+  ProgressInfo sse_decode_progress_info(SseDeserializer deserializer);
 
   @protected
   ReleaseAsset sse_decode_release_asset(SseDeserializer deserializer);
@@ -176,7 +444,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SelfTestStep sse_decode_self_test_step(SseDeserializer deserializer);
 
   @protected
+  Strength sse_decode_strength(SseDeserializer deserializer);
+
+  @protected
+  TaskEvent sse_decode_task_event(SseDeserializer deserializer);
+
+  @protected
   int sse_decode_u_16(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_u_32(SseDeserializer deserializer);
 
   @protected
   BigInt sse_decode_u_64(SseDeserializer deserializer);
@@ -191,8 +468,84 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   UpdateInfo sse_decode_update_info(SseDeserializer deserializer);
 
   @protected
+  BigInt sse_decode_usize(SseDeserializer deserializer);
+
+  @protected
+  VaultInfo sse_decode_vault_info(SseDeserializer deserializer);
+
+  @protected
   void sse_encode_AnyhowException(
     AnyhowException self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    CreatedVault self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+    SecretInput self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVaultSession(
+    VaultSession self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    CreatedVault self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    CreatedVault self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+    SecretInput self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVaultSession(
+    VaultSession self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    CreatedVault self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+    SecretInput self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVaultSession(
+    VaultSession self,
     SseSerializer serializer,
   );
 
@@ -203,14 +556,48 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_StreamSink_task_event_Sse(
+    RustStreamSink<TaskEvent> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_String(String self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_app_settings(AppSettings self, SseSerializer serializer);
 
   @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
+  void
+  sse_encode_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+    SecretInput self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_app_settings(
+    AppSettings self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_outcome_info(
+    OutcomeInfo self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_platform_info(
     PlatformInfo self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_progress_info(
+    ProgressInfo self,
     SseSerializer serializer,
   );
 
@@ -236,7 +623,34 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_entry_info(EntryInfo self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_entry_kind(EntryKind self, SseSerializer serializer);
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_known_vault(KnownVault self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_String(List<String> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_entry_info(
+    List<EntryInfo> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_known_vault(
+    List<KnownVault> self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_list_prim_u_8_strict(
@@ -254,6 +668,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
+  void
+  sse_encode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+    SecretInput? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_release_asset(
     ReleaseAsset? self,
     SseSerializer serializer,
@@ -266,10 +687,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_outcome_info(OutcomeInfo self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_package_info(PackageInfo self, SseSerializer serializer);
+
+  @protected
   void sse_encode_package_kind(PackageKind self, SseSerializer serializer);
 
   @protected
   void sse_encode_platform_info(PlatformInfo self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_progress_info(ProgressInfo self, SseSerializer serializer);
 
   @protected
   void sse_encode_release_asset(ReleaseAsset self, SseSerializer serializer);
@@ -284,7 +714,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_self_test_step(SelfTestStep self, SseSerializer serializer);
 
   @protected
+  void sse_encode_strength(Strength self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_task_event(TaskEvent self, SseSerializer serializer);
+
+  @protected
   void sse_encode_u_16(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_32(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_64(BigInt self, SseSerializer serializer);
@@ -297,12 +736,66 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_update_info(UpdateInfo self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_usize(BigInt self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_vault_info(VaultInfo self, SseSerializer serializer);
 }
 
 // Section: wire_class
 
 class RustLibWire implements BaseWire {
   RustLibWire.fromExternalLibrary(ExternalLibrary lib);
+
+  void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+        ptr,
+      );
+
+  void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+        ptr,
+      );
+
+  void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+        ptr,
+      );
+
+  void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+        ptr,
+      );
+
+  void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVaultSession(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVaultSession(
+        ptr,
+      );
+
+  void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVaultSession(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVaultSession(
+        ptr,
+      );
 }
 
 @JS('wasm_bindgen')
@@ -310,4 +803,34 @@ external RustLibWasmModule get wasmModule;
 
 @JS()
 @anonymous
-extension type RustLibWasmModule._(JSObject _) implements JSObject {}
+extension type RustLibWasmModule._(JSObject _) implements JSObject {
+  external void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    int ptr,
+  );
+
+  external void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    int ptr,
+  );
+
+  external void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+    int ptr,
+  );
+
+  external void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
+    int ptr,
+  );
+
+  external void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVaultSession(
+    int ptr,
+  );
+
+  external void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVaultSession(
+    int ptr,
+  );
+}

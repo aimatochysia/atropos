@@ -118,6 +118,181 @@ pub fn decrypt(
     Ok(total)
 }
 
+/// Push-style encryption: write plaintext in, sealed chunks come out of
+/// `inner`. Call [`StreamWriter::finish`] to seal the final chunk; dropping
+/// the writer without it leaves a stream that will fail to decrypt.
+pub struct StreamWriter<W: Write> {
+    inner: W,
+    key: AeadKey,
+    prefix: [u8; PREFIX_LEN],
+    aad: Vec<u8>,
+    buf: Zeroizing<Vec<u8>>,
+    counter: u32,
+    pub written: u64,
+}
+
+impl<W: Write> StreamWriter<W> {
+    pub fn new(inner: W, key: &[u8; 32], prefix: [u8; PREFIX_LEN], aad: &[u8]) -> CoreResult<Self> {
+        Ok(Self {
+            inner,
+            key: AeadKey::new(key)?,
+            prefix,
+            aad: aad.to_vec(),
+            buf: Zeroizing::new(Vec::with_capacity(CHUNK_LEN)),
+            counter: 0,
+            written: 0,
+        })
+    }
+
+    fn seal(&mut self, last: bool) -> CoreResult<()> {
+        let sealed = self.key.seal(
+            &nonce(&self.prefix, self.counter, last),
+            &self.aad,
+            &self.buf,
+        )?;
+        self.inner.write_all(&sealed)?;
+        self.buf.clear();
+        self.counter = self.counter.checked_add(1).ok_or(CoreError::InvalidInput {
+            message: "too much data for one stream".into(),
+        })?;
+        Ok(())
+    }
+
+    pub fn finish(mut self) -> CoreResult<W> {
+        self.seal(true)?;
+        self.inner.flush()?;
+        Ok(self.inner)
+    }
+}
+
+impl<W: Write> Write for StreamWriter<W> {
+    fn write(&mut self, mut data: &[u8]) -> std::io::Result<usize> {
+        let total = data.len();
+        while !data.is_empty() {
+            if self.buf.len() == CHUNK_LEN {
+                // More data follows, so the full chunk is not the last one.
+                self.seal(false).map_err(std::io::Error::other)?;
+            }
+            let take = (CHUNK_LEN - self.buf.len()).min(data.len());
+            self.buf.extend_from_slice(&data[..take]);
+            data = &data[take..];
+        }
+        self.written += total as u64;
+        Ok(total)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Pull-style decryption: reading yields authenticated plaintext. Hitting the
+/// end of the stream without its final chunk is an error, so truncation is
+/// always caught.
+pub struct StreamReader<R: Read> {
+    inner: R,
+    key: AeadKey,
+    prefix: [u8; PREFIX_LEN],
+    aad: Vec<u8>,
+    counter: u32,
+    plain: Zeroizing<Vec<u8>>,
+    pos: usize,
+    peeked: Option<u8>,
+    done: bool,
+}
+
+impl<R: Read> StreamReader<R> {
+    pub fn new(inner: R, key: &[u8; 32], prefix: [u8; PREFIX_LEN], aad: &[u8]) -> CoreResult<Self> {
+        Ok(Self {
+            inner,
+            key: AeadKey::new(key)?,
+            prefix,
+            aad: aad.to_vec(),
+            counter: 0,
+            plain: Zeroizing::new(Vec::new()),
+            pos: 0,
+            peeked: None,
+            done: false,
+        })
+    }
+
+    fn next_chunk(&mut self) -> CoreResult<()> {
+        let mut sealed = vec![0u8; CHUNK_LEN + TAG_LEN];
+        let mut filled = 0;
+        if let Some(b) = self.peeked.take() {
+            sealed[0] = b;
+            filled = 1;
+        }
+        filled += read_full(&mut self.inner, &mut sealed[filled..])?;
+        let mut last = filled < sealed.len();
+        if !last {
+            let mut one = [0u8; 1];
+            if read_full(&mut self.inner, &mut one)? == 0 {
+                last = true;
+            } else {
+                self.peeked = Some(one[0]);
+            }
+        }
+        if filled < TAG_LEN {
+            return Err(CoreError::DecryptFailed);
+        }
+        self.plain = self.key.open(
+            &nonce(&self.prefix, self.counter, last),
+            &self.aad,
+            &sealed[..filled],
+        )?;
+        self.pos = 0;
+        self.done = last;
+        self.counter = self
+            .counter
+            .checked_add(1)
+            .ok_or(CoreError::DecryptFailed)?;
+        Ok(())
+    }
+
+    /// True once the final chunk was authenticated and fully read.
+    pub fn at_end(&mut self) -> CoreResult<bool> {
+        while self.pos == self.plain.len() && !self.done {
+            self.next_chunk()?;
+        }
+        Ok(self.done && self.pos == self.plain.len())
+    }
+}
+
+impl<R: Read> Read for StreamReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        while self.pos == self.plain.len() {
+            if self.done {
+                return Ok(0);
+            }
+            self.next_chunk().map_err(std::io::Error::other)?;
+        }
+        let n = buf.len().min(self.plain.len() - self.pos);
+        buf[..n].copy_from_slice(&self.plain[self.pos..self.pos + n]);
+        self.pos += n;
+        Ok(n)
+    }
+}
+
+/// Number of sealed chunks in a stream of `sealed` bytes.
+pub fn chunk_count(sealed: u64) -> u64 {
+    sealed.div_ceil((CHUNK_LEN + TAG_LEN) as u64).max(1)
+}
+
+/// Decrypts one sealed chunk for random access. `last` must be true only for
+/// the final chunk of the stream (see [`chunk_count`]).
+pub fn decrypt_chunk(
+    key: &AeadKey,
+    prefix: &[u8; PREFIX_LEN],
+    aad: &[u8],
+    index: u64,
+    last: bool,
+    sealed: &[u8],
+) -> CoreResult<Zeroizing<Vec<u8>>> {
+    let index = u32::try_from(index).map_err(|_| CoreError::DecryptFailed)?;
+    key.open(&nonce(prefix, index, last), aad, sealed)
+}
+
 /// Size of the encrypted stream for a plaintext of `len` bytes.
 pub fn sealed_len(len: u64) -> u64 {
     let chunks = if len == 0 {
@@ -180,5 +355,43 @@ mod tests {
         let mut longer = sealed.clone();
         longer.extend_from_slice(&[0u8; 20]);
         assert!(dec(&longer, b"file-1").is_err());
+    }
+
+    #[test]
+    fn writer_and_reader_match_the_pull_api() {
+        for len in [0, 5, CHUNK_LEN, CHUNK_LEN + 3, 2 * CHUNK_LEN] {
+            let data: Vec<u8> = (0..len).map(|i| (i % 13) as u8).collect();
+            let mut w = StreamWriter::new(Vec::new(), &[9; 32], [1; 7], b"file-1").unwrap();
+            for piece in data.chunks(1000) {
+                w.write_all(piece).unwrap();
+            }
+            let pushed = w.finish().unwrap();
+            assert_eq!(pushed, enc(&data), "len {len}");
+            let mut r = StreamReader::new(&pushed[..], &[9; 32], [1; 7], b"file-1").unwrap();
+            let mut back = Vec::new();
+            r.read_to_end(&mut back).unwrap();
+            assert_eq!(back, data);
+            assert!(r.at_end().unwrap());
+            if len > CHUNK_LEN {
+                let cut = &pushed[..CHUNK_LEN + TAG_LEN];
+                let mut r = StreamReader::new(cut, &[9; 32], [1; 7], b"file-1").unwrap();
+                assert!(r.read_to_end(&mut Vec::new()).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn random_access_matches_sequential() {
+        let data: Vec<u8> = (0..(2 * CHUNK_LEN + 99)).map(|i| (i % 7) as u8).collect();
+        let sealed = enc(&data);
+        let n = chunk_count(sealed.len() as u64);
+        assert_eq!(n, 3);
+        let key = AeadKey::new(&[9; 32]).unwrap();
+        let c = CHUNK_LEN + TAG_LEN;
+        let last = decrypt_chunk(&key, &[1; 7], b"file-1", 2, true, &sealed[2 * c..]).unwrap();
+        assert_eq!(&last[..], &data[2 * CHUNK_LEN..]);
+        let first = decrypt_chunk(&key, &[1; 7], b"file-1", 0, false, &sealed[..c]).unwrap();
+        assert_eq!(&first[..], &data[..CHUNK_LEN]);
+        assert!(decrypt_chunk(&key, &[1; 7], b"file-1", 0, true, &sealed[..c]).is_err());
     }
 }
