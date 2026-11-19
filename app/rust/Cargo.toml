@@ -1,6 +1,6 @@
 [package]
 name = "atropos_core"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Core encryption, vault and update logic for the Atropos app"
 license = "MIT"
@@ -29,6 +29,9 @@ base64 = "0.22"
 hex = "0.4"
 bip39 = { version = "2", default-features = false, features = ["std", "zeroize"] }
 zxcvbn = "3"
+hayro = "0.9"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
+pulldown-cmark = { version = "0.13", default-features = false }
 
 # PC/SC smartcard readers on desktops (Android reaches cards over NFC instead).
 [target.'cfg(not(target_os = "android"))'.dependencies]

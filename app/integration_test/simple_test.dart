@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -8,9 +9,11 @@ import 'package:atropos/core/platform_files.dart';
 import 'package:atropos/src/rust/api/card.dart' as card;
 import 'package:atropos/src/rust/api/secure_input.dart';
 import 'package:atropos/src/rust/api/vault.dart';
+import 'package:atropos/src/rust/api/viewer.dart';
 import 'package:atropos/src/rust/frb_generated.dart';
 import 'package:atropos/state/app_controller.dart';
 import 'package:atropos/ui/selftest_page.dart';
+import 'package:atropos/ui/viewer_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -76,6 +79,36 @@ Future<void> typeOnKeypad(WidgetTester tester, String text) async {
     await tester.pump();
   }
 }
+
+/// A one-page PDF (200x100 points) with a red square on the left.
+List<int> tinyPdf() {
+  const content = '1 0 0 rg 0 0 100 100 re f';
+  final objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R >>',
+    '<< /Length ${content.length} >>\nstream\n$content\nendstream',
+  ];
+  final out = StringBuffer('%PDF-1.4\n');
+  final offsets = <int>[];
+  for (var i = 0; i < objects.length; i++) {
+    offsets.add(out.length);
+    out.write('${i + 1} 0 obj\n${objects[i]}\nendobj\n');
+  }
+  final xref = out.length;
+  out.write('xref\n0 ${objects.length + 1}\n0000000000 65535 f \n');
+  for (final o in offsets) {
+    out.write('${o.toString().padLeft(10, '0')} 00000 n \n');
+  }
+  out.write(
+    'trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\n'
+    'startxref\n$xref\n%%EOF\n',
+  );
+  return ascii.encode(out.toString());
+}
+
+const tinyPng =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -287,5 +320,90 @@ void main() {
     await tester.tap(find.byKey(const Key('vault-Keys')));
     await pumpUntil(tester, find.byKey(const Key('vault-add')));
     expect(controller.anyOpen, isTrue);
+  });
+
+  testWidgets('the viewer shows pictures, PDFs, text and Markdown', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(900, 1800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final src = Directory('${tmp.path}/src')..createSync();
+    File('${src.path}/dot.png').writeAsBytesSync(base64.decode(tinyPng));
+    File('${src.path}/doc.pdf').writeAsBytesSync(tinyPdf());
+    File('${src.path}/notes.md')
+        .writeAsStringSync('# Shopping\n\n- **milk**\n');
+    File('${src.path}/log.txt').writeAsStringSync('first line\nsecond line');
+    File('${src.path}/blob.bin').writeAsBytesSync([0, 1, 2, 0, 3]);
+    final created = await createVault(
+      parentDir: tmp.path,
+      name: 'Viewer',
+      password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+    );
+    final s = created.session;
+    await finish(
+      s.import_(
+        sources: [
+          for (final n in [
+            'dot.png',
+            'doc.pdf',
+            'notes.md',
+            'log.txt',
+            'blob.bin',
+          ])
+            '${src.path}/$n',
+        ],
+        deleteOriginals: false,
+      ),
+    );
+    final entries = {for (final e in await s.list()) e.name: e};
+    final controller = AppController(
+      store: RustSettingsStore('${tmp.path}/config'),
+      files: TempFiles(tmp.path),
+    );
+    await controller.load();
+    await controller.opened(s);
+
+    Future<void> show(String name) async {
+      await tester.pumpWidget(
+        AppScope(
+          controller: controller,
+          child: MaterialApp(
+            home: ViewerPage(
+              key: ValueKey(name),
+              session: s,
+              entry: entries[name]!,
+              onExport: () async {},
+            ),
+          ),
+        ),
+      );
+    }
+
+    expect(previewForName(name: 'dot.png'), PreviewKind.image);
+    await show('dot.png');
+    await pumpUntil(tester, find.byKey(const Key('viewer-image')));
+
+    await show('doc.pdf');
+    await pumpUntil(tester, find.byType(RawImage));
+    expect(find.byKey(const Key('viewer-pdf')), findsOneWidget);
+
+    await show('notes.md');
+    await pumpUntil(tester, find.byKey(const Key('viewer-markdown')));
+    expect(find.textContaining('Shopping', findRichText: true), findsOneWidget);
+    expect(find.textContaining('milk', findRichText: true), findsOneWidget);
+
+    await show('log.txt');
+    await pumpUntil(tester, find.byKey(const Key('viewer-text')));
+    expect(find.text('second line'), findsOneWidget);
+
+    await show('blob.bin');
+    await pumpUntil(tester, find.byKey(const Key('viewer-message')));
+
+    // Locking wipes what an open viewer holds.
+    final v = await s.openViewer(id: entries['log.txt']!.id);
+    await controller.lockAll();
+    await expectLater(v.text(), throwsA(anything));
+    await tester.pumpWidget(const SizedBox());
   });
 }

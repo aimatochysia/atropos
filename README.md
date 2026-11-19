@@ -20,8 +20,17 @@ validated module.
 
 ## Status
 
-v0.0: project scaffold, release pipeline, signed in-app updates and an on-device
-crypto self-test. Vaults arrive in v0.1. See the plan for the roadmap.
+- v0.1: vaults with a password and a 24-word recovery phrase, import, browse,
+  export behind a confirmation, sealed packages, auto-lock.
+- v0.2: fingerprint or face unlock on Android, renewed by a password or card
+  unlock at least every 24 hours.
+- v0.3: security cards (OpenPGP and PIV) over NFC on Android and PC/SC readers
+  on desktops.
+- v0.4: in-app viewer for pictures, PDFs, text and Markdown. Rust decrypts,
+  decodes and renders (PDF with the pure-Rust `hayro` renderer); Flutter only
+  receives pixels or text lines, and the plaintext is wiped when the viewer
+  closes or the vault locks. Other file types show their details and can be
+  exported.
 
 ## Building
 

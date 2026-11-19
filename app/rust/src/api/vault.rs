@@ -1,7 +1,7 @@
 //! The vault API the Flutter UI calls. Dart only ever holds an opaque
 //! `VaultSession`; keys stay inside it in Rust and are wiped on `lock()`.
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use flutter_rust_bridge::frb;
 use zeroize::{Zeroize, Zeroizing};
@@ -104,7 +104,7 @@ fn reporter(sink: &StreamSink<TaskEvent>) -> impl FnMut(&Progress) + '_ {
     }
 }
 
-fn parse_id(id: &str) -> CoreResult<Id> {
+pub(crate) fn parse_id(id: &str) -> CoreResult<Id> {
     hex::decode(id)
         .ok()
         .and_then(|v| v.try_into().ok())
@@ -153,6 +153,8 @@ pub struct VaultSession {
     inner: Arc<Mutex<Option<Vault>>>,
     path: String,
     vault_id: String,
+    /// Open viewers; their plaintext is wiped when the vault locks.
+    pub(crate) viewers: Arc<Mutex<Vec<Weak<crate::view::Slot>>>>,
 }
 
 pub struct CreatedVault {
@@ -166,6 +168,7 @@ fn session(v: Vault) -> VaultSession {
         path: path_to_string(v.path()),
         vault_id: hex::encode(v.vault_id()),
         inner: Arc::new(Mutex::new(Some(v))),
+        viewers: Arc::default(),
     }
 }
 
@@ -289,7 +292,7 @@ fn locked() -> CoreError {
 }
 
 impl VaultSession {
-    fn with<T>(&self, f: impl FnOnce(&mut Vault) -> CoreResult<T>) -> CoreResult<T> {
+    pub(crate) fn with<T>(&self, f: impl FnOnce(&mut Vault) -> CoreResult<T>) -> CoreResult<T> {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let v = g.as_mut().ok_or_else(locked)?;
         f(v)
@@ -327,6 +330,10 @@ impl VaultSession {
     /// Wipes every key of this vault from memory. Runs off the UI thread:
     /// a task in progress finishes its current step first.
     pub fn lock(&self) {
+        let viewers = std::mem::take(&mut *self.viewers.lock().unwrap_or_else(|e| e.into_inner()));
+        for v in viewers.iter().filter_map(Weak::upgrade) {
+            *v.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         *g = None;
     }
