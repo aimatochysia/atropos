@@ -242,12 +242,14 @@ pub fn decode_text(data: &[u8]) -> (Zeroizing<String>, bool) {
     let text = if let Some(big_endian) = utf16_bom(data) {
         let units: Zeroizing<Vec<u16>> = Zeroizing::new(
             data[2..]
-                .chunks_exact(2)
-                .map(|c| {
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&c| {
                     if big_endian {
-                        u16::from_be_bytes([c[0], c[1]])
+                        u16::from_be_bytes(c)
                     } else {
-                        u16::from_le_bytes([c[0], c[1]])
+                        u16::from_le_bytes(c)
                     }
                 })
                 .collect(),
