@@ -33,6 +33,11 @@ Future<void> rememberVault({required String configDir, required String path}) =>
       path: path,
     );
 
+/// A random id for this installation, made on first use. Biometric key
+/// slots in vault headers name the device they belong to with it.
+Future<String> deviceId({required String configDir}) =>
+    RustLib.instance.api.crateApiSettingsDeviceId(configDir: configDir);
+
 /// Removes a vault from the list; its files are not touched.
 Future<void> forgetVault({required String configDir, required String path}) =>
     RustLib.instance.api.crateApiSettingsForgetVault(

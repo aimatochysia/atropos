@@ -12,7 +12,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 import 'secure_input.dart';
 part 'vault.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `locked`, `outcome_info`, `parse_id`, `parse_ids`, `parse_parent`, `progress_info`, `reporter`, `session`, `vault_name`, `with`, `wrong_secret`
+// These functions are ignored because they are not marked as `pub`: `locked`, `outcome_info`, `parse_device`, `parse_id`, `parse_ids`, `parse_parent`, `progress_info`, `reporter`, `session`, `strong`, `vault_name`, `with`, `wrong_secret`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `eq`, `fmt`
 
 /// Whether `path` is an Atropos vault folder.
@@ -34,20 +34,37 @@ Future<CreatedVault> createVault({
   password: password,
 );
 
+/// `device_id` (from `device_id()`) renews biometric unlock on this device.
 Future<VaultSession> unlockWithPassword({
   required String path,
   required SecretInput password,
+  String? deviceId,
 }) => RustLib.instance.api.crateApiVaultUnlockWithPassword(
   path: path,
   password: password,
+  deviceId: deviceId,
 );
 
 Future<VaultSession> unlockWithRecoveryPhrase({
   required String path,
   required SecretInput phrase,
+  String? deviceId,
 }) => RustLib.instance.api.crateApiVaultUnlockWithRecoveryPhrase(
   path: path,
   phrase: phrase,
+  deviceId: deviceId,
+);
+
+/// Unlocks with the secret the platform keystore released after a
+/// biometric check. `secret` is wiped here.
+Future<VaultSession> unlockWithDevice({
+  required String path,
+  required String deviceId,
+  required List<int> secret,
+}) => RustLib.instance.api.crateApiVaultUnlockWithDevice(
+  path: path,
+  deviceId: deviceId,
+  secret: secret,
 );
 
 /// Checks a recovery phrase's words and checksum without unlocking.
@@ -102,6 +119,17 @@ abstract class VaultSession implements RustOpaqueInterface {
 
   Future<void> delete({required List<String> ids});
 
+  /// When biometric unlock on this device stops working (Unix seconds), or
+  /// None when it is off.
+  Future<PlatformInt64?> deviceExpires({required String deviceId});
+
+  /// Turns on biometric unlock for this device. Returns the 32-byte secret
+  /// the platform keystore must protect; the caller wipes it after use.
+  Future<Uint8List> enrollDevice({
+    required String deviceId,
+    required String label,
+  });
+
   /// Writes items out as normal, unencrypted files into `dest_dir`.
   Stream<TaskEvent> export_({
     required List<String> ids,
@@ -147,6 +175,8 @@ abstract class VaultSession implements RustOpaqueInterface {
 
   String get path;
 
+  Future<void> removeDevice({required String deviceId});
+
   Future<void> rename({required String id, required String name});
 
   /// Seals items into one `.atropos` file. With a passphrase anyone who
@@ -159,6 +189,9 @@ abstract class VaultSession implements RustOpaqueInterface {
 
   /// Total files and bytes in the vault.
   Future<OutcomeInfo> totals();
+
+  /// Hex id of the vault (same as `VaultInfo.vault_id`).
+  String get vaultId;
 }
 
 class EntryInfo {
@@ -314,14 +347,19 @@ class VaultInfo {
   final String name;
   final PlatformInt64 created;
 
+  /// Hex; names this vault's biometric key in the platform keystore.
+  final String vaultId;
+
   const VaultInfo({
     required this.path,
     required this.name,
     required this.created,
+    required this.vaultId,
   });
 
   @override
-  int get hashCode => path.hashCode ^ name.hashCode ^ created.hashCode;
+  int get hashCode =>
+      path.hashCode ^ name.hashCode ^ created.hashCode ^ vaultId.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -330,5 +368,6 @@ class VaultInfo {
           runtimeType == other.runtimeType &&
           path == other.path &&
           name == other.name &&
-          created == other.created;
+          created == other.created &&
+          vaultId == other.vaultId;
 }

@@ -1,6 +1,8 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:atropos/app.dart';
+import 'package:atropos/core/biometrics.dart';
 import 'package:atropos/core/crypto_service.dart';
 import 'package:atropos/core/platform_files.dart';
 import 'package:atropos/src/rust/api/secure_input.dart';
@@ -21,6 +23,32 @@ class TempFiles extends PlatformFiles {
 
   @override
   Future<String> defaultVaultParent() async => '$root/vaults';
+}
+
+/// Stands in for the Android Keystore: keeps secrets in memory and always
+/// "recognises" the fingerprint.
+class FakeBiometrics implements Biometrics {
+  final Map<String, Uint8List> keys = {};
+
+  @override
+  Future<BiometricStatus> status() async => BiometricStatus.ready;
+
+  @override
+  Future<bool> has(String vaultId) async => keys.containsKey(vaultId);
+
+  @override
+  Future<bool> enroll(String vaultId, Uint8List secret) async {
+    keys[vaultId] = Uint8List.fromList(secret);
+    secret.fillRange(0, secret.length, 0);
+    return true;
+  }
+
+  @override
+  Future<Uint8List?> unlock(String vaultId, {String? title}) async =>
+      keys[vaultId] == null ? null : Uint8List.fromList(keys[vaultId]!);
+
+  @override
+  Future<void> remove(String vaultId) async => keys.remove(vaultId);
 }
 
 Future<OutcomeInfo> finish(Stream<TaskEvent> s) async {
@@ -146,9 +174,11 @@ void main() {
     tester.view.physicalSize = const Size(900, 1800);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
+    final bio = FakeBiometrics();
     final controller = AppController(
       store: RustSettingsStore('${tmp.path}/config'),
       files: TempFiles(tmp.path),
+      biometrics: bio,
     );
     await controller.load();
     await tester.pumpWidget(
@@ -205,5 +235,23 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.anyOpen, isFalse);
     expect(find.byKey(const Key('new-vault')), findsOneWidget);
+
+    // Fingerprint unlock: enrol through the core, then opening the vault
+    // unlocks it without typing anything.
+    final device = controller.deviceId!;
+    final s = await unlockWithPassword(
+      path: '${tmp.path}/vaults/Keys',
+      password: SecretInput.fromText(text: pw),
+      deviceId: device,
+    );
+    await bio.enroll(
+      s.vaultId,
+      await s.enrollDevice(deviceId: device, label: 'test'),
+    );
+    expect(await s.deviceExpires(deviceId: device), isNotNull);
+    await s.lock();
+    await tester.tap(find.byKey(const Key('vault-Keys')));
+    await pumpUntil(tester, find.byKey(const Key('vault-add')));
+    expect(controller.anyOpen, isTrue);
   });
 }

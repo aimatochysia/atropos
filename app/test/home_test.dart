@@ -49,6 +49,9 @@ class FakeStore implements SettingsStore {
   @override
   Future<void> forget(String path) async =>
       known.removeWhere((v) => v.path == path);
+
+  @override
+  Future<String> deviceId() async => '00112233445566778899aabbccddeeff';
 }
 
 void main() {

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 
+import '../core/biometrics.dart';
 import '../core/platform_files.dart';
 import '../src/rust/api/settings.dart' as rs;
 import '../src/rust/api/vault.dart';
@@ -16,6 +17,9 @@ abstract interface class SettingsStore {
   Future<List<rs.KnownVault>> vaults();
   Future<void> remember(String path);
   Future<void> forget(String path);
+
+  /// This installation's random id (names its biometric key slots).
+  Future<String> deviceId();
 }
 
 class RustSettingsStore implements SettingsStore {
@@ -39,6 +43,9 @@ class RustSettingsStore implements SettingsStore {
   @override
   Future<void> forget(String path) =>
       rs.forgetVault(configDir: configDir, path: path);
+
+  @override
+  Future<String> deviceId() => rs.deviceId(configDir: configDir);
 }
 
 /// Auto-lock choices offered in settings, in minutes (0 = when the app
@@ -53,10 +60,18 @@ String autoLockLabel(int minutes) => switch (minutes) {
 
 /// App-wide state: settings, known vaults, unlocked vaults and auto-lock.
 class AppController extends ChangeNotifier with WidgetsBindingObserver {
-  AppController({required this.store, this.files = const PlatformFiles()});
+  AppController({
+    required this.store,
+    this.files = const PlatformFiles(),
+    this.biometrics = const PlatformBiometrics(),
+  });
 
   final SettingsStore store;
   final PlatformFiles files;
+  final Biometrics biometrics;
+
+  /// Null until [load] or when it could not be made.
+  String? deviceId;
 
   rs.AppSettings settings = const rs.AppSettings(
     autoLockMinutes: 0,
@@ -76,6 +91,11 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       settings = await store.load();
     } catch (_) {
       // Keep the defaults; a broken settings file must not block vaults.
+    }
+    try {
+      deviceId = await store.deviceId();
+    } catch (_) {
+      deviceId = null;
     }
     await refreshVaults();
     loaded = true;

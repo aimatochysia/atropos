@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/biometrics.dart';
 import '../core/errors.dart';
 import '../src/rust/api/vault.dart' as core;
 import '../state/app_controller.dart';
@@ -25,6 +26,78 @@ class _UnlockPageState extends State<UnlockPage> {
   bool _busy = false;
   String? _error;
 
+  /// Set when this vault has fingerprint unlock on this device.
+  String? _bioVaultId;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkBiometrics();
+  }
+
+  Future<void> _checkBiometrics() async {
+    final app = AppScope.read(context);
+    try {
+      if (app.deviceId == null) return;
+      if (await app.biometrics.status() != BiometricStatus.ready) return;
+      final info = await core.inspectVault(path: widget.path);
+      if (!await app.biometrics.has(info.vaultId) || !mounted) return;
+      setState(() => _bioVaultId = info.vaultId);
+      await _unlockWithBiometrics();
+    } catch (_) {
+      // Fingerprint unlock is optional; the password field still works.
+    }
+  }
+
+  Future<void> _unlockWithBiometrics() async {
+    final vaultId = _bioVaultId;
+    final app = AppScope.read(context);
+    final device = app.deviceId;
+    if (vaultId == null || device == null || _busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final secret = await app.biometrics.unlock(
+        vaultId,
+        title: 'Unlock ${widget.name}',
+      );
+      if (secret == null) return;
+      final session = await core.unlockWithDevice(
+        path: widget.path,
+        deviceId: device,
+        secret: secret,
+      );
+      secret.fillRange(0, secret.length, 0);
+      await _opened(session, usedRecovery: false);
+    } on BiometricError catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.message;
+        if (e.invalidated) _bioVaultId = null;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _error = describeError(e));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _opened(
+    core.VaultSession session, {
+    required bool usedRecovery,
+  }) async {
+    final app = AppScope.read(context);
+    await app.opened(session);
+    if (!mounted) return;
+    final nav = Navigator.of(context);
+    nav.pushReplacement(
+      MaterialPageRoute<void>(builder: (_) => VaultPage(session: session)),
+    );
+    if (usedRecovery) _offerNewPassword(nav.context, session);
+  }
+
   @override
   void dispose() {
     _secret.clear();
@@ -41,7 +114,7 @@ class _UnlockPageState extends State<UnlockPage> {
       );
       return;
     }
-    final app = AppScope.read(context);
+    final device = AppScope.read(context).deviceId;
     setState(() {
       _busy = true;
       _error = null;
@@ -51,17 +124,15 @@ class _UnlockPageState extends State<UnlockPage> {
           ? await core.unlockWithRecoveryPhrase(
               path: widget.path,
               phrase: _secret,
+              deviceId: device,
             )
-          : await core.unlockWithPassword(path: widget.path, password: _secret);
+          : await core.unlockWithPassword(
+              path: widget.path,
+              password: _secret,
+              deviceId: device,
+            );
       _secret.clear();
-      await app.opened(session);
-      if (!mounted) return;
-      final usedRecovery = _recovery;
-      final nav = Navigator.of(context);
-      nav.pushReplacement(
-        MaterialPageRoute<void>(builder: (_) => VaultPage(session: session)),
-      );
-      if (usedRecovery) _offerNewPassword(nav.context, session);
+      await _opened(session, usedRecovery: _recovery);
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -143,6 +214,15 @@ class _UnlockPageState extends State<UnlockPage> {
                 : const Icon(Icons.lock_open),
             label: Text(_busy ? 'Unlocking…' : 'Unlock'),
           ),
+          if (_bioVaultId != null) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              key: const Key('unlock-biometric'),
+              onPressed: _busy ? null : _unlockWithBiometrics,
+              icon: const Icon(Icons.fingerprint),
+              label: const Text('Use fingerprint or face'),
+            ),
+          ],
           const SizedBox(height: 8),
           TextButton(
             key: const Key('toggle-recovery'),

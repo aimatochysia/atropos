@@ -23,7 +23,7 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use self::blob::BlobReader;
-use self::header::{HeaderBody, HeaderFile, SlotKind, Unlock, VaultSecrets};
+use self::header::{HeaderBody, HeaderFile, SlotKind, Unlock, VaultSecrets, DEVICE_TTL_SECS};
 use self::manifest::{DataRef, Entry, Id, Kind, Manifest, Record};
 use crate::crypto::password::Argon2Cost;
 use crate::crypto::random_array;
@@ -168,6 +168,20 @@ impl Vault {
         let header = read_header(path)?;
         let (secrets, slot) = header.body.unlock(how)?;
         header.verify(&secrets)?;
+        if !how.is_strong() {
+            // The expiry is trusted only now that the header MAC checked out.
+            let s = &header.body.slots[slot];
+            let t = now();
+            let expired = s.expires.is_none_or(|e| t > e);
+            let clock_back = s.renewed.is_some_and(|r| t + 300 < r);
+            if expired || clock_back {
+                return Err(CoreError::InvalidInput {
+                    message: "fingerprint unlock has expired. Unlock once with the \
+                              password or recovery phrase and it works again for 24 hours"
+                        .into(),
+                });
+            }
+        }
         let vault_id = header.body.vault_id.clone();
         let mkey = secrets.subkey(b"manifest", &vault_id)?;
         let manifest = Manifest::load(&path.join(MANIFEST_DIR), &mkey, &vault_id)?;
@@ -246,6 +260,64 @@ impl Vault {
         body.remove_slots(SlotKind::Password);
         body.add_slot(&self.secrets, &Unlock::Password(new_password), cost)?;
         self.save_header(body)
+    }
+
+    /// Adds (or replaces) this device's biometric slot and returns the new
+    /// secret for the platform keystore to protect. It opens the vault for
+    /// [DEVICE_TTL_SECS] after each strong unlock on this device.
+    pub fn enroll_device(&mut self, device: &[u8], label: &str) -> CoreResult<Zeroizing<[u8; 32]>> {
+        if device.is_empty() || device.len() > 64 {
+            return Err(CoreError::InvalidInput {
+                message: "bad device id".into(),
+            });
+        }
+        let secret = Zeroizing::new(random_array::<32>()?);
+        let mut body = self.header.body.clone();
+        body.remove_device(device);
+        body.add_slot(
+            &self.secrets,
+            &Unlock::Device {
+                device,
+                secret: &secret,
+            },
+            Argon2Cost::DEFAULT,
+        )?;
+        let t = now();
+        let slot = body.device_slot_mut(device).ok_or(CoreError::Crypto)?;
+        slot.label = Some(label.chars().take(64).collect());
+        slot.expires = Some(t + DEVICE_TTL_SECS);
+        slot.renewed = Some(t);
+        self.save_header(body)?;
+        Ok(secret)
+    }
+
+    pub fn remove_device(&mut self, device: &[u8]) -> CoreResult<()> {
+        if self.header.body.device_slot(device).is_none() {
+            return Ok(());
+        }
+        let mut body = self.header.body.clone();
+        body.remove_device(device);
+        self.save_header(body)
+    }
+
+    /// After a password or recovery unlock: this device's biometric slot works
+    /// for another [DEVICE_TTL_SECS].
+    pub fn renew_device(&mut self, device: &[u8]) -> CoreResult<()> {
+        if self.header.body.device_slot(device).is_none() {
+            return Ok(());
+        }
+        let mut body = self.header.body.clone();
+        let t = now();
+        if let Some(slot) = body.device_slot_mut(device) {
+            slot.expires = Some(t + DEVICE_TTL_SECS);
+            slot.renewed = Some(t);
+        }
+        self.save_header(body)
+    }
+
+    /// When this device's biometric slot stops working, if it has one.
+    pub fn device_expires(&self, device: &[u8]) -> Option<i64> {
+        self.header.body.device_slot(device).and_then(|s| s.expires)
     }
 
     /// Replaces the recovery key and returns the new phrase.

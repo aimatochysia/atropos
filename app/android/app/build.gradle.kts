@@ -70,4 +70,7 @@ flutter {
 dependencies {
     // FileProvider, used to hand update APKs to the installer.
     implementation("androidx.core:core-ktx:1.13.1")
+    // Fingerprint/face unlock bound to a hardware Keystore key.
+    implementation("androidx.biometric:biometric:1.1.0")
+    implementation("androidx.appcompat:appcompat:1.7.0")
 }
