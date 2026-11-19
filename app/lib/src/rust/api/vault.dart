@@ -11,6 +11,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 
 import 'secure_input.dart';
+import 'viewer.dart';
 part 'vault.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `locked`, `outcome_info`, `parse_device`, `parse_id`, `parse_ids`, `parse_parent`, `progress_info`, `reporter`, `session_of`, `session`, `strong_session`, `strong`, `vault_name`, `with`, `wrong_secret`
@@ -183,6 +184,9 @@ abstract class VaultSession implements RustOpaqueInterface {
     SecretInput? passphrase,
     String? parent,
   });
+
+  /// Decrypts file `id` into memory for the viewer.
+  Future<FileViewer> openViewer({required String id});
 
   String get path;
 

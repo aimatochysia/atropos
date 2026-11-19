@@ -13,6 +13,7 @@ import 'api/selftest.dart';
 import 'api/settings.dart';
 import 'api/update.dart';
 import 'api/vault.dart';
+import 'api/viewer.dart';
 
 import 'dart:async';
 import 'dart:convert';
@@ -39,6 +40,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault;
 
   CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_FileViewerPtr => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFileViewer;
+
+  CrossPlatformFinalizerArg
   get rust_arc_decrement_strong_count_SecretInputPtr => wire
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput;
 
@@ -58,6 +63,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   CreatedVault
   dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    dynamic raw,
+  );
+
+  @protected
+  FileViewer
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFileViewer(
     dynamic raw,
   );
 
@@ -92,6 +103,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  FileViewer
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFileViewer(
+    dynamic raw,
+  );
+
+  @protected
   SecretInput
   dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
     dynamic raw,
@@ -121,6 +138,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   CreatedVault
   dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    dynamic raw,
+  );
+
+  @protected
+  FileViewer
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFileViewer(
     dynamic raw,
   );
 
@@ -202,6 +225,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   EntryKind dco_decode_entry_kind(dynamic raw);
 
   @protected
+  double dco_decode_f_64(dynamic raw);
+
+  @protected
   int dco_decode_i_32(dynamic raw);
 
   @protected
@@ -226,6 +252,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<KnownVault> dco_decode_list_known_vault(dynamic raw);
 
   @protected
+  List<MdBlock> dco_decode_list_md_block(dynamic raw);
+
+  @protected
+  List<MdSpan> dco_decode_list_md_span(dynamic raw);
+
+  @protected
+  List<PictureSize> dco_decode_list_picture_size(dynamic raw);
+
+  @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
 
   @protected
@@ -233,6 +268,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<SelfTestStep> dco_decode_list_self_test_step(dynamic raw);
+
+  @protected
+  MdBlock dco_decode_md_block(dynamic raw);
+
+  @protected
+  MdBlockKind dco_decode_md_block_kind(dynamic raw);
+
+  @protected
+  MdSpan dco_decode_md_span(dynamic raw);
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
@@ -265,13 +309,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PackageKind dco_decode_package_kind(dynamic raw);
 
   @protected
+  PictureSize dco_decode_picture_size(dynamic raw);
+
+  @protected
   PlatformInfo dco_decode_platform_info(dynamic raw);
+
+  @protected
+  PreviewKind dco_decode_preview_kind(dynamic raw);
 
   @protected
   ProgressInfo dco_decode_progress_info(dynamic raw);
 
   @protected
   ReleaseAsset dco_decode_release_asset(dynamic raw);
+
+  @protected
+  RenderedPicture dco_decode_rendered_picture(dynamic raw);
 
   @protected
   SelfTestReport dco_decode_self_test_report(dynamic raw);
@@ -284,6 +337,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   TaskEvent dco_decode_task_event(dynamic raw);
+
+  @protected
+  TextView dco_decode_text_view(dynamic raw);
 
   @protected
   int dco_decode_u_16(dynamic raw);
@@ -325,6 +381,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  FileViewer
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFileViewer(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   SecretInput
   sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
     SseDeserializer deserializer,
@@ -355,6 +417,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  FileViewer
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFileViewer(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   SecretInput
   sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
     SseDeserializer deserializer,
@@ -378,6 +446,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   CreatedVault
   sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  FileViewer
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFileViewer(
     SseDeserializer deserializer,
   );
 
@@ -467,6 +541,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   EntryKind sse_decode_entry_kind(SseDeserializer deserializer);
 
   @protected
+  double sse_decode_f_64(SseDeserializer deserializer);
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
@@ -493,6 +570,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<KnownVault> sse_decode_list_known_vault(SseDeserializer deserializer);
 
   @protected
+  List<MdBlock> sse_decode_list_md_block(SseDeserializer deserializer);
+
+  @protected
+  List<MdSpan> sse_decode_list_md_span(SseDeserializer deserializer);
+
+  @protected
+  List<PictureSize> sse_decode_list_picture_size(SseDeserializer deserializer);
+
+  @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
 
   @protected
@@ -502,6 +588,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<SelfTestStep> sse_decode_list_self_test_step(
     SseDeserializer deserializer,
   );
+
+  @protected
+  MdBlock sse_decode_md_block(SseDeserializer deserializer);
+
+  @protected
+  MdBlockKind sse_decode_md_block_kind(SseDeserializer deserializer);
+
+  @protected
+  MdSpan sse_decode_md_span(SseDeserializer deserializer);
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
@@ -538,13 +633,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PackageKind sse_decode_package_kind(SseDeserializer deserializer);
 
   @protected
+  PictureSize sse_decode_picture_size(SseDeserializer deserializer);
+
+  @protected
   PlatformInfo sse_decode_platform_info(SseDeserializer deserializer);
+
+  @protected
+  PreviewKind sse_decode_preview_kind(SseDeserializer deserializer);
 
   @protected
   ProgressInfo sse_decode_progress_info(SseDeserializer deserializer);
 
   @protected
   ReleaseAsset sse_decode_release_asset(SseDeserializer deserializer);
+
+  @protected
+  RenderedPicture sse_decode_rendered_picture(SseDeserializer deserializer);
 
   @protected
   SelfTestReport sse_decode_self_test_report(SseDeserializer deserializer);
@@ -557,6 +661,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   TaskEvent sse_decode_task_event(SseDeserializer deserializer);
+
+  @protected
+  TextView sse_decode_text_view(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_16(SseDeserializer deserializer);
@@ -604,6 +711,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFileViewer(
+    FileViewer self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
   sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
     SecretInput self,
     SseSerializer serializer,
@@ -634,6 +748,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
     CreatedVault self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFileViewer(
+    FileViewer self,
     SseSerializer serializer,
   );
 
@@ -672,6 +793,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
     CreatedVault self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFileViewer(
+    FileViewer self,
     SseSerializer serializer,
   );
 
@@ -784,6 +912,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_entry_kind(EntryKind self, SseSerializer serializer);
 
   @protected
+  void sse_encode_f_64(double self, SseSerializer serializer);
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
@@ -817,6 +948,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_md_block(List<MdBlock> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_md_span(List<MdSpan> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_picture_size(
+    List<PictureSize> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
 
   @protected
@@ -830,6 +973,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     List<SelfTestStep> self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_md_block(MdBlock self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_md_block_kind(MdBlockKind self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_md_span(MdSpan self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
@@ -872,13 +1024,25 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_package_kind(PackageKind self, SseSerializer serializer);
 
   @protected
+  void sse_encode_picture_size(PictureSize self, SseSerializer serializer);
+
+  @protected
   void sse_encode_platform_info(PlatformInfo self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_preview_kind(PreviewKind self, SseSerializer serializer);
 
   @protected
   void sse_encode_progress_info(ProgressInfo self, SseSerializer serializer);
 
   @protected
   void sse_encode_release_asset(ReleaseAsset self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_rendered_picture(
+    RenderedPicture self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_self_test_report(
@@ -894,6 +1058,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_task_event(TaskEvent self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_text_view(TextView self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_16(int self, SseSerializer serializer);
@@ -958,6 +1125,22 @@ class RustLibWire implements BaseWire {
       );
 
   void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFileViewer(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFileViewer(
+        ptr,
+      );
+
+  void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFileViewer(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFileViewer(
+        ptr,
+      );
+
+  void
   rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSecretInput(
     int ptr,
   ) => wasmModule
@@ -1013,6 +1196,16 @@ extension type RustLibWasmModule._(JSObject _) implements JSObject {
 
   external void
   rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCreatedVault(
+    int ptr,
+  );
+
+  external void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFileViewer(
+    int ptr,
+  );
+
+  external void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFileViewer(
     int ptr,
   );
 

@@ -6,6 +6,7 @@ import '../core/biometrics.dart';
 import '../core/format.dart';
 import '../core/platform_files.dart';
 import '../src/rust/api/vault.dart';
+import '../src/rust/api/viewer.dart';
 import '../state/app_controller.dart';
 import 'card_flows.dart';
 import 'package_flows.dart';
@@ -13,6 +14,7 @@ import 'recovery_page.dart';
 import 'secret_dialog.dart';
 import 'storage_access.dart';
 import 'task_progress.dart';
+import 'viewer_page.dart';
 import 'widgets/feedback.dart';
 
 /// Browses an unlocked vault: folders, files, adding, exporting, packages.
@@ -85,9 +87,21 @@ class _VaultPageState extends State<VaultPage> {
         _loading = true;
       });
       _reload();
+    } else if (e.kind == EntryKind.file &&
+        previewForName(name: e.name) != PreviewKind.none) {
+      _view(e);
     } else {
       _details(e);
     }
+  }
+
+  void _view(EntryInfo e) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            ViewerPage(session: _s, entry: e, onExport: () => _export([e])),
+      ),
+    );
   }
 
   void _goTo(int depth) {
@@ -400,12 +414,17 @@ class _VaultPageState extends State<VaultPage> {
                 subtitle: Text(_subtitle(e)),
               ),
               const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.visibility_outlined),
-                title: const Text('View'),
-                subtitle: const Text('The in-app viewer arrives in v0.4.'),
-                enabled: false,
-              ),
+              if (e.kind == EntryKind.file)
+                ListTile(
+                  key: const Key('item-view'),
+                  leading: const Icon(Icons.visibility_outlined),
+                  title: const Text('View'),
+                  subtitle: Text(describeFileType(name: e.name)),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _view(e);
+                  },
+                ),
               ListTile(
                 key: const Key('item-export'),
                 leading: const Icon(Icons.file_download_outlined),
@@ -605,7 +624,7 @@ class _VaultPageState extends State<VaultPage> {
       Icon(switch (e.kind) {
         EntryKind.folder => Icons.folder,
         EntryKind.link => Icons.link,
-        EntryKind.file => Icons.insert_drive_file_outlined,
+        EntryKind.file => previewIcon(previewForName(name: e.name)),
       }, color: e.kind == EntryKind.folder ? scheme.primary : null);
 
   static String _subtitle(EntryInfo e) {

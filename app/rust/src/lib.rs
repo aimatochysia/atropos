@@ -6,6 +6,7 @@ pub(crate) mod crypto;
 pub mod error;
 mod util;
 pub(crate) mod vault;
+pub(crate) mod view;
 #[rustfmt::skip]
 #[allow(unsafe_code)]
 mod frb_generated;

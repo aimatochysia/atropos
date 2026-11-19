@@ -5,3 +5,4 @@ pub mod selftest;
 pub mod settings;
 pub mod update;
 pub mod vault;
+pub mod viewer;
