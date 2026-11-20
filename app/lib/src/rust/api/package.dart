@@ -33,14 +33,32 @@ abstract class PackageSession implements RustOpaqueInterface {
   /// Wipes the package key and every file opened from it.
   void close();
 
+  /// Writes one file of the package out, unencrypted, into `dest_dir`.
+  /// Returns the path written (a free name, never overwriting).
+  Future<String> extractFile({required String id, required String destDir});
+
   bool isClosed();
 
   /// Items directly inside `parent` (None = the top level), folders first.
-  Future<List<EntryInfo>> list({String? parent});
+  Future<List<EntryInfo>> list({String? parent, SortOrder? sort});
 
   /// The package file's name without `.atropos`.
   String get name;
 
   /// Decrypts one file of the package into memory for the viewer.
-  Future<FileViewer> openViewer({required String id});
+  /// `open_as` overrides what the file looks like (remembered per file
+  /// type on this device, since a package cannot be changed).
+  Future<FileViewer> openViewer({required String id, PreviewKind? openAs});
+
+  /// Saves the picture open in `viewer` with `edits` applied over file
+  /// `id`, rewriting the package in place.
+  Future<void> saveEditedImage({
+    required FileViewer viewer,
+    required String id,
+    required List<ImageEdit> edits,
+  });
+
+  /// Saves edited text as the new contents of file `id`. The package is
+  /// written again under the same lock and swapped in place.
+  Future<void> saveText({required String id, required String text});
 }

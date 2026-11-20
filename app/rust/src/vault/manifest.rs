@@ -56,6 +56,10 @@ pub struct Entry {
     /// SHA-256 of the plaintext, checked on export.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
+    /// How the person chose to open this file ("text", "image", ...),
+    /// overriding what Atropos detects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_as: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -377,6 +381,7 @@ mod tests {
             link_target: None,
             data: None,
             sha256: None,
+            open_as: None,
         }
     }
 

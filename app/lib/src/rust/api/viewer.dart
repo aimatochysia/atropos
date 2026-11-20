@@ -7,9 +7,11 @@ import '../error.dart';
 import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
+import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
+part 'viewer.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `closed`, `new`, `with`, `wrong_kind`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `eq`, `fmt`, `from`, `from`
+// These functions are ignored because they are not marked as `pub`: `closed`, `copy_name`, `encode_edited`, `md_blocks`, `new`, `with`, `wrong_kind`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `from`, `from`, `from`, `from`
 
 /// What the viewer can likely show for a file, judged from its name.
 PreviewKind previewForName({required String name}) =>
@@ -18,6 +20,10 @@ PreviewKind previewForName({required String name}) =>
 /// A short description of the file type, such as "PDF document".
 String describeFileType({required String name}) =>
     RustLib.instance.api.crateApiViewerDescribeFileType(name: name);
+
+/// Lays out Markdown that is not secret, such as release notes.
+List<MdBlock> parseMarkdown({required String text}) =>
+    RustLib.instance.api.crateApiViewerParseMarkdown(text: text);
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FileViewer>>
 abstract class FileViewer implements RustOpaqueInterface {
@@ -56,6 +62,23 @@ abstract class FileViewer implements RustOpaqueInterface {
 
   /// Each page's size in points (1/72 inch).
   Future<List<PictureSize>> pdfPages();
+
+  /// Pages where `query` appears, for "Find" in a PDF.
+  Future<List<PdfMatch>> pdfSearch({
+    required String query,
+    required bool matchCase,
+  });
+
+  /// Camera details of a photo (empty when it has none).
+  Future<List<DetailRow>> photoDetails();
+
+  /// The picture with `edits` applied, scaled to fit, for the editor's
+  /// preview.
+  Future<RenderedPicture> renderEdited({
+    required List<ImageEdit> edits,
+    required int maxWidth,
+    required int maxHeight,
+  });
 
   /// Frame `index` of an animation scaled to fit.
   Future<RenderedPicture> renderFrame({
@@ -149,6 +172,44 @@ class AudioState {
           error == other.error;
 }
 
+/// One labelled line of file details.
+class DetailRow {
+  final String label;
+  final String value;
+
+  const DetailRow({required this.label, required this.value});
+
+  @override
+  int get hashCode => label.hashCode ^ value.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DetailRow &&
+          runtimeType == other.runtimeType &&
+          label == other.label &&
+          value == other.value;
+}
+
+@freezed
+sealed class ImageEdit with _$ImageEdit {
+  const ImageEdit._();
+
+  const factory ImageEdit.rotateLeft() = ImageEdit_RotateLeft;
+  const factory ImageEdit.rotateRight() = ImageEdit_RotateRight;
+  const factory ImageEdit.flipHorizontal() = ImageEdit_FlipHorizontal;
+  const factory ImageEdit.flipVertical() = ImageEdit_FlipVertical;
+
+  /// Fractions (0 to 1) of the picture as it is after the edits before.
+  const factory ImageEdit.crop({
+    required double left,
+    required double top,
+    required double right,
+    required double bottom,
+  }) = ImageEdit_Crop;
+  const factory ImageEdit.resize({required int maxSide}) = ImageEdit_Resize;
+}
+
 class MdBlock {
   final MdBlockKind kind;
   final int level;
@@ -233,6 +294,31 @@ class MdSpan {
           code == other.code &&
           strike == other.strike &&
           link == other.link;
+}
+
+/// A page where "Find" matched.
+class PdfMatch {
+  final int page;
+  final int count;
+  final String snippet;
+
+  const PdfMatch({
+    required this.page,
+    required this.count,
+    required this.snippet,
+  });
+
+  @override
+  int get hashCode => page.hashCode ^ count.hashCode ^ snippet.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PdfMatch &&
+          runtimeType == other.runtimeType &&
+          page == other.page &&
+          count == other.count &&
+          snippet == other.snippet;
 }
 
 class PictureSize {

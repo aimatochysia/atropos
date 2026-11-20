@@ -8,8 +8,8 @@ use flutter_rust_bridge::frb;
 use zeroize::Zeroizing;
 
 use super::secure_input::SecretInput;
-use super::vault::{wrong_secret, EntryInfo, EntryKind, VaultSession};
-use super::viewer::{FileViewer, Viewers};
+use super::vault::{sort_entries, wrong_secret, EntryInfo, EntryKind, SortOrder, VaultSession};
+use super::viewer::{FileViewer, ImageEdit, PreviewKind, Viewers};
 use crate::error::{CoreError, CoreResult};
 use crate::vault::manifest::Kind;
 use crate::vault::package::{PackageKey, PackageReader};
@@ -119,7 +119,11 @@ impl PackageSession {
     }
 
     /// Items directly inside `parent` (None = the top level), folders first.
-    pub fn list(&self, parent: Option<String>) -> CoreResult<Vec<EntryInfo>> {
+    pub fn list(
+        &self,
+        parent: Option<String>,
+        sort: Option<SortOrder>,
+    ) -> CoreResult<Vec<EntryInfo>> {
         let parent = parent.map(|p| parse_index(&p)).transpose()?;
         self.with(|r| {
             let items = r.items();
@@ -149,19 +153,18 @@ impl PackageSession {
                     modified: it.modified,
                     executable: it.executable,
                     children: counts.get(it.path.as_slice()).copied().unwrap_or(0),
+                    open_as: None,
                 })
                 .collect();
-            out.sort_by(|a, b| {
-                (a.kind != EntryKind::Folder)
-                    .cmp(&(b.kind != EntryKind::Folder))
-                    .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-            });
+            sort_entries(&mut out, sort.unwrap_or_default());
             Ok(out)
         })
     }
 
     /// Decrypts one file of the package into memory for the viewer.
-    pub fn open_viewer(&self, id: String) -> CoreResult<FileViewer> {
+    /// `open_as` overrides what the file looks like (remembered per file
+    /// type on this device, since a package cannot be changed).
+    pub fn open_viewer(&self, id: String, open_as: Option<PreviewKind>) -> CoreResult<FileViewer> {
         let index = parse_index(&id)?;
         let (name, data) = self.with(|r| {
             let item = r.items().get(index).cloned().ok_or_else(closed)?;
@@ -175,7 +178,63 @@ impl PackageSession {
             Ok((item.path.last().cloned().unwrap_or_default(), buf))
         })?;
         let inner = self.inner.clone();
-        FileViewer::new(name, data, &self.inner.viewers, move || inner.is_closed())
+        FileViewer::new(
+            name,
+            data,
+            open_as.map(Into::into),
+            &self.inner.viewers,
+            move || inner.is_closed(),
+        )
+    }
+
+    /// Saves edited text as the new contents of file `id`. The package is
+    /// written again under the same lock and swapped in place.
+    pub fn save_text(&self, id: String, text: String) -> CoreResult<()> {
+        let index = parse_index(&id)?;
+        let text = Zeroizing::new(text);
+        self.with(|r| r.replace_file(index, text.as_bytes()))
+    }
+
+    /// Saves the picture open in `viewer` with `edits` applied over file
+    /// `id`, rewriting the package in place.
+    pub fn save_edited_image(
+        &self,
+        viewer: &FileViewer,
+        id: String,
+        edits: Vec<ImageEdit>,
+    ) -> CoreResult<()> {
+        let index = parse_index(&id)?;
+        let data = viewer.encode_edited(edits)?;
+        self.with(|r| r.replace_file(index, &data))
+    }
+
+    /// Writes one file of the package out, unencrypted, into `dest_dir`.
+    /// Returns the path written (a free name, never overwriting).
+    pub fn extract_file(&self, id: String, dest_dir: String) -> CoreResult<String> {
+        let index = parse_index(&id)?;
+        self.with(|r| {
+            let item = r.items().get(index).cloned().ok_or_else(closed)?;
+            if item.kind != Kind::File {
+                return Err(CoreError::InvalidInput {
+                    message: "only files can be extracted one at a time".into(),
+                });
+            }
+            let name = item.path.last().cloned().unwrap_or_default();
+            let dest = crate::vault::free_disk_name(Path::new(&dest_dir), &name);
+            let part = dest.with_extension("atropos-part");
+            let result = (|| -> CoreResult<()> {
+                let mut out = std::io::BufWriter::new(std::fs::File::create(&part)?);
+                r.read_file(index, &mut out)?;
+                out.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+                std::fs::rename(&part, &dest)?;
+                Ok(())
+            })();
+            if let Err(e) = result {
+                let _ = std::fs::remove_file(&part);
+                return Err(e);
+            }
+            Ok(dest.to_string_lossy().into_owned())
+        })
     }
 
     /// Wipes the package key and every file opened from it.

@@ -115,6 +115,34 @@ class HomePage extends StatelessWidget {
                   icon: const Icon(Icons.folder_open_outlined),
                   label: const Text('Open an existing vault folder'),
                 ),
+                if (app.packages.isNotEmpty) ...[
+                  const _Header('Recent packages'),
+                  Card(
+                    child: Column(
+                      children: [
+                        for (final p in app.packages)
+                          ListTile(
+                            key: Key('recent-${p.name}'),
+                            leading: const Icon(Icons.inventory_2_outlined),
+                            title: Text(p.name),
+                            subtitle: Text(
+                              p.lastOpened > 0
+                                  ? 'Opened ${relativeTime(p.lastOpened)}'
+                                  : 'Package',
+                            ),
+                            onTap: () =>
+                                browsePackageFlow(context, path: p.path),
+                            trailing: IconButton(
+                              key: Key('forget-${p.name}'),
+                              tooltip: 'Remove from this list',
+                              icon: const Icon(Icons.close),
+                              onPressed: () => app.forgetPackage(p.path),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
                 const _Header('Packages'),
                 Card(
                   child: Column(

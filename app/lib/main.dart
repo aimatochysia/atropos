@@ -8,6 +8,7 @@ import 'core/update_service.dart';
 import 'src/rust/frb_generated.dart';
 import 'state/app_controller.dart';
 import 'state/update_controller.dart';
+import 'ui/update_ui.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -31,8 +32,9 @@ Future<void> main() async {
     ),
   );
   await controller.load();
-  if (!controller.settings.checkUpdates) return;
-  // Give startup a moment before going to the network.
-  await Future<void>.delayed(const Duration(seconds: 3));
-  await updates.check(silent: true);
+  await startupUpdateCheck(
+    controller,
+    updates,
+    () => appNavigator.currentContext,
+  );
 }

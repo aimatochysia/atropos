@@ -51,6 +51,21 @@ class PlatformFiles {
     );
   }
 
+  /// One file to open in place, such as an `.atropos` package that may be
+  /// changed. On Android this is the real file when the picker can say
+  /// where it is, and otherwise a temporary copy.
+  Future<PickedFiles?> pickFileInPlace() async {
+    if (Platform.isAndroid && await hasStorageAccess()) {
+      final path = await _storage.invokeMethod<String>('pickFilePath');
+      if (path == null) return null;
+      if (path.startsWith('copy:')) {
+        return PickedFiles([path.substring(5)], temporary: true);
+      }
+      return PickedFiles([path], temporary: false);
+    }
+    return pickFile();
+  }
+
   /// One file to open, such as an `.atropos` package.
   Future<PickedFiles?> pickFile() async {
     final f = await openFile();

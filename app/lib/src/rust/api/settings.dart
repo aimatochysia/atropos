@@ -8,8 +8,20 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+import 'vault.dart';
+import 'viewer.dart';
+
 // These functions are ignored because they are not marked as `pub`: `read`, `write`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `eq`, `eq`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+
+/// Whether an automatic update check is due now.
+bool updateCheckDue({
+  required AppSettings settings,
+  required PlatformInt64 now,
+}) => RustLib.instance.api.crateApiSettingsUpdateCheckDue(
+  settings: settings,
+  now: now,
+);
 
 Future<AppSettings> loadSettings({required String configDir}) =>
     RustLib.instance.api.crateApiSettingsLoadSettings(configDir: configDir);
@@ -33,6 +45,41 @@ Future<void> rememberVault({required String configDir, required String path}) =>
       path: path,
     );
 
+/// Remembers how a vault's lists are sorted.
+Future<void> setVaultSort({
+  required String configDir,
+  required String path,
+  required SortOrder sort,
+}) => RustLib.instance.api.crateApiSettingsSetVaultSort(
+  configDir: configDir,
+  path: path,
+  sort: sort,
+);
+
+/// Recently opened packages, newest first.
+Future<List<KnownPackage>> listPackages({required String configDir}) =>
+    RustLib.instance.api.crateApiSettingsListPackages(configDir: configDir);
+
+Future<void> rememberPackage({
+  required String configDir,
+  required String path,
+}) => RustLib.instance.api.crateApiSettingsRememberPackage(
+  configDir: configDir,
+  path: path,
+);
+
+Future<void> forgetPackage({required String configDir, required String path}) =>
+    RustLib.instance.api.crateApiSettingsForgetPackage(
+      configDir: configDir,
+      path: path,
+    );
+
+/// Forgets every remembered package (when the list is switched off).
+Future<void> forgetAllPackages({required String configDir}) => RustLib
+    .instance
+    .api
+    .crateApiSettingsForgetAllPackages(configDir: configDir);
+
 /// A random id for this installation, made on first use. Biometric key
 /// slots in vault headers name the device they belong to with it.
 Future<String> deviceId({required String configDir}) =>
@@ -52,12 +99,34 @@ class AppSettings {
 
   /// Type passwords on the Atropos keypad instead of the system keyboard.
   final bool secureKeyboard;
-  final bool checkUpdates;
+  final UpdateCheck updateCheck;
+
+  /// Unix seconds of the last update check (for Daily and Weekly).
+  final PlatformInt64 lastUpdateCheck;
+
+  /// A version the person chose to skip; its popup is not shown again.
+  final String skippedVersion;
+
+  /// The last version whose release notes popup was shown.
+  final String notesShownFor;
+
+  /// List recently opened packages on Home (by name only).
+  final bool rememberPackages;
+
+  /// Sort order inside packages.
+  final SortOrder packageSort;
+  final List<OpenAsRule> openAsRules;
 
   const AppSettings({
     required this.autoLockMinutes,
     required this.secureKeyboard,
-    required this.checkUpdates,
+    required this.updateCheck,
+    required this.lastUpdateCheck,
+    required this.skippedVersion,
+    required this.notesShownFor,
+    required this.rememberPackages,
+    required this.packageSort,
+    required this.openAsRules,
   });
 
   static Future<AppSettings> default_() =>
@@ -67,7 +136,13 @@ class AppSettings {
   int get hashCode =>
       autoLockMinutes.hashCode ^
       secureKeyboard.hashCode ^
-      checkUpdates.hashCode;
+      updateCheck.hashCode ^
+      lastUpdateCheck.hashCode ^
+      skippedVersion.hashCode ^
+      notesShownFor.hashCode ^
+      rememberPackages.hashCode ^
+      packageSort.hashCode ^
+      openAsRules.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -76,15 +151,23 @@ class AppSettings {
           runtimeType == other.runtimeType &&
           autoLockMinutes == other.autoLockMinutes &&
           secureKeyboard == other.secureKeyboard &&
-          checkUpdates == other.checkUpdates;
+          updateCheck == other.updateCheck &&
+          lastUpdateCheck == other.lastUpdateCheck &&
+          skippedVersion == other.skippedVersion &&
+          notesShownFor == other.notesShownFor &&
+          rememberPackages == other.rememberPackages &&
+          packageSort == other.packageSort &&
+          openAsRules == other.openAsRules;
 }
 
-class KnownVault {
+/// A recently opened package. Only `name` is shown; `path` is kept to open
+/// it again.
+class KnownPackage {
   final String path;
   final String name;
   final PlatformInt64 lastOpened;
 
-  const KnownVault({
+  const KnownPackage({
     required this.path,
     required this.name,
     required this.lastOpened,
@@ -96,9 +179,71 @@ class KnownVault {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is KnownVault &&
+      other is KnownPackage &&
           runtimeType == other.runtimeType &&
           path == other.path &&
           name == other.name &&
           lastOpened == other.lastOpened;
+}
+
+class KnownVault {
+  final String path;
+  final String name;
+  final PlatformInt64 lastOpened;
+
+  /// How this vault's lists are sorted.
+  final SortOrder sort;
+
+  const KnownVault({
+    required this.path,
+    required this.name,
+    required this.lastOpened,
+    required this.sort,
+  });
+
+  @override
+  int get hashCode =>
+      path.hashCode ^ name.hashCode ^ lastOpened.hashCode ^ sort.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is KnownVault &&
+          runtimeType == other.runtimeType &&
+          path == other.path &&
+          name == other.name &&
+          lastOpened == other.lastOpened &&
+          sort == other.sort;
+}
+
+/// "Always open files ending in .pub as text", for packages (which can't
+/// store a choice per file).
+class OpenAsRule {
+  /// Lowercase, without the dot.
+  final String extension_;
+  final PreviewKind kind;
+
+  const OpenAsRule({required this.extension_, required this.kind});
+
+  @override
+  int get hashCode => extension_.hashCode ^ kind.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is OpenAsRule &&
+          runtimeType == other.runtimeType &&
+          extension_ == other.extension_ &&
+          kind == other.kind;
+}
+
+/// How often Atropos looks for a new version.
+enum UpdateCheck {
+  off,
+  everyStart,
+  daily,
+  weekly;
+
+  static Future<UpdateCheck> default_() =>
+      RustLib.instance.api.crateApiSettingsUpdateCheckDefault();
 }

@@ -7,6 +7,9 @@ import 'state/update_scope.dart';
 import 'ui/home_page.dart';
 import 'ui/theme.dart';
 
+/// Lets startup work (the update popup) show dialogs.
+final appNavigator = GlobalKey<NavigatorState>();
+
 class AtroposApp extends StatefulWidget {
   const AtroposApp({
     super.key,
@@ -44,6 +47,7 @@ class _AtroposAppState extends State<AtroposApp> {
     final Widget root = AppScope(
       controller: widget.controller,
       child: MaterialApp(
+        navigatorKey: appNavigator,
         title: 'Atropos',
         debugShowCheckedModeBanner: false,
         theme: AtroposTheme.light,

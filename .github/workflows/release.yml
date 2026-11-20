@@ -95,6 +95,15 @@ jobs:
           args: --unreleased --tag v${{ steps.version.outputs.version }} --strip header
         env:
           OUTPUT: RELEASE_NOTES.md
+      - name: Hand-written notes first
+        # docs/releases/vX.Y.Z.md explains the release in full; the commit
+        # list follows it.
+        run: |
+          notes="docs/releases/v${{ steps.version.outputs.version }}.md"
+          if [ -f "$notes" ]; then
+            { cat "$notes"; printf '\n\n## All changes\n'; cat RELEASE_NOTES.md; } > notes.tmp
+            mv notes.tmp RELEASE_NOTES.md
+          fi
       - run: cat RELEASE_NOTES.md
       - uses: actions/upload-artifact@v4
         with:

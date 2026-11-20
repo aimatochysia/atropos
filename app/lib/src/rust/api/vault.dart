@@ -16,8 +16,8 @@ import 'secure_input.dart';
 import 'viewer.dart';
 part 'vault.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `locked`, `new_session`, `outcome_info`, `parse_device`, `parse_id`, `parse_ids`, `parse_parent`, `progress_info`, `reporter`, `session_of`, `session`, `strong_session`, `strong`, `take_for_rekey`, `try_with`, `vault_name`, `with`, `wrong_secret`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `entry_info`, `locked`, `natural_key`, `new_session`, `outcome_info`, `parse_device`, `parse_id`, `parse_ids`, `parse_parent`, `progress_info`, `reporter`, `session_of`, `session`, `sort_entries`, `strong_session`, `strong`, `take_for_rekey`, `try_with`, `vault_name`, `with`, `wrong_secret`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`
 
 /// Whether `path` is an Atropos vault folder.
 bool isVault({required String path}) =>
@@ -194,8 +194,9 @@ abstract class VaultSession implements RustOpaqueInterface {
 
   bool isLocked();
 
-  /// Items directly inside `parent` (None = the top level), folders first.
-  Future<List<EntryInfo>> list({String? parent});
+  /// Items directly inside `parent` (None = the top level), folders
+  /// first, then in `sort` order (by name when None).
+  Future<List<EntryInfo>> list({String? parent, SortOrder? sort});
 
   /// Wipes every key of this vault from memory. Runs off the UI thread:
   /// a task in progress finishes its current step first.
@@ -238,6 +239,15 @@ abstract class VaultSession implements RustOpaqueInterface {
   /// missing files are taken off the list.
   Future<RepairInfo> repair({required bool removeBroken});
 
+  /// Saves an edited picture from `viewer`: over file `id`, or as a new
+  /// copy beside it. Returns the id of the saved file.
+  Future<String> saveEditedImage({
+    required FileViewer viewer,
+    required String id,
+    required List<ImageEdit> edits,
+    required bool asCopy,
+  });
+
   /// Saves edited text as the new contents of file `id` (UTF-8).
   Future<void> saveText({required String id, required String text});
 
@@ -248,6 +258,13 @@ abstract class VaultSession implements RustOpaqueInterface {
     required String outFile,
     SecretInput? passphrase,
   });
+
+  /// Files and folders anywhere in the vault whose name contains `query`
+  /// (ignoring case), best matches first.
+  Future<List<SearchHit>> search({required String query});
+
+  /// Remembers how file `id` opens from now on (None = detect it).
+  Future<void> setOpenAs({required String id, PreviewKind? openAs});
 
   /// Re-wraps the password slot at `strength`. Returns how long one
   /// unlock now takes on this device, in milliseconds.
@@ -276,6 +293,9 @@ class EntryInfo {
   /// Number of direct children, for folders.
   final int children;
 
+  /// The person's "Open as" choice for this file, if any.
+  final PreviewKind? openAs;
+
   const EntryInfo({
     required this.id,
     required this.name,
@@ -284,6 +304,7 @@ class EntryInfo {
     required this.modified,
     required this.executable,
     required this.children,
+    this.openAs,
   });
 
   @override
@@ -294,7 +315,8 @@ class EntryInfo {
       size.hashCode ^
       modified.hashCode ^
       executable.hashCode ^
-      children.hashCode;
+      children.hashCode ^
+      openAs.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -307,10 +329,30 @@ class EntryInfo {
           size == other.size &&
           modified == other.modified &&
           executable == other.executable &&
-          children == other.children;
+          children == other.children &&
+          openAs == other.openAs;
 }
 
 enum EntryKind { file, folder, link }
+
+/// A folder's id and name.
+class FolderRef {
+  final String id;
+  final String name;
+
+  const FolderRef({required this.id, required this.name});
+
+  @override
+  int get hashCode => id.hashCode ^ name.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FolderRef &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          name == other.name;
+}
 
 class OutcomeInfo {
   final BigInt files;
@@ -401,6 +443,66 @@ class ProgressInfo {
           bytesDone == other.bytesDone &&
           bytesTotal == other.bytesTotal &&
           current == other.current;
+}
+
+/// A file or folder found by name.
+class SearchHit {
+  final EntryInfo entry;
+
+  /// Id of the folder holding it (None = the top level).
+  final String? parent;
+
+  /// The folders it is in, from the top level down.
+  final List<FolderRef> folders;
+
+  const SearchHit({required this.entry, this.parent, required this.folders});
+
+  @override
+  int get hashCode => entry.hashCode ^ parent.hashCode ^ folders.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SearchHit &&
+          runtimeType == other.runtimeType &&
+          entry == other.entry &&
+          parent == other.parent &&
+          folders == other.folders;
+}
+
+enum SortBy {
+  name,
+
+  /// The file's own modified date, not when it was added.
+  modified,
+
+  /// File type (extension), then name.
+  type,
+  size;
+
+  static Future<SortBy> default_() =>
+      RustLib.instance.api.crateApiVaultSortByDefault();
+}
+
+class SortOrder {
+  final SortBy by;
+  final bool descending;
+
+  const SortOrder({required this.by, required this.descending});
+
+  static Future<SortOrder> default_() =>
+      RustLib.instance.api.crateApiVaultSortOrderDefault();
+
+  @override
+  int get hashCode => by.hashCode ^ descending.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SortOrder &&
+          runtimeType == other.runtimeType &&
+          by == other.by &&
+          descending == other.descending;
 }
 
 @freezed

@@ -5,10 +5,43 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/format.dart';
+import '../src/rust/api/settings.dart' show updateCheckDue;
+import '../state/app_controller.dart';
 import '../core/update_service.dart';
 import '../state/update_controller.dart';
 import '../state/update_scope.dart';
+import 'viewer_page.dart' show MarkdownText;
 import 'widgets/feedback.dart';
+
+/// Looks for an update when the "Look for updates" setting says it is due.
+/// A new version's release notes pop up once; after that the banner on the
+/// home screen remains until it is updated or skipped.
+Future<void> startupUpdateCheck(
+  AppController app,
+  UpdateController updates,
+  BuildContext? Function() context, {
+  Duration delay = const Duration(seconds: 3),
+}) async {
+  final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+  if (!updateCheckDue(settings: app.settings, now: now)) return;
+  // Give startup a moment before going to the network.
+  await Future<void>.delayed(delay);
+  final found = await updates.check(silent: true);
+  if (updates.lastChecked == null) return;
+  await app.updateSettings(app.settings.copyWith(lastUpdateCheck: now));
+  if (found == null) return;
+  final s = app.settings;
+  if (found.version == s.skippedVersion) {
+    updates.dismiss();
+    return;
+  }
+  if (found.version == s.notesShownFor) return;
+  final ctx = context();
+  if (ctx == null || !ctx.mounted) return;
+  await app.updateSettings(s.copyWith(notesShownFor: found.version));
+  if (!ctx.mounted) return;
+  await showUpdateDialog(ctx, updates, offer: app);
+}
 
 /// "Atropos X is available" card at the top of the dashboard.
 class UpdateBanner extends StatelessWidget {
@@ -22,7 +55,14 @@ class UpdateBanner extends StatelessWidget {
       listenable: updates,
       builder: (context, _) {
         final u = updates.available;
-        if (!updates.showBanner || u == null) return const SizedBox.shrink();
+        final skipped = context
+            .dependOnInheritedWidgetOfExactType<AppScope>()
+            ?.notifier
+            ?.settings
+            .skippedVersion;
+        if (!updates.showBanner || u == null || u.version == skipped) {
+          return const SizedBox.shrink();
+        }
         final scheme = Theme.of(context).colorScheme;
         return Card(
           key: const Key('update-banner'),
@@ -104,15 +144,28 @@ class UpdateTile extends StatelessWidget {
   }
 }
 
-Future<void> showUpdateDialog(BuildContext context, UpdateController updates) =>
-    showDialog<void>(
-      context: context,
-      builder: (_) => UpdateDialog(updates: updates),
-    );
+/// Shows the release and its notes. With [offer] (the popup on start) it
+/// also offers to skip this version.
+Future<void> showUpdateDialog(
+  BuildContext context,
+  UpdateController updates, {
+  AppController? offer,
+}) => showDialog<void>(
+  context: context,
+  builder: (_) => UpdateDialog(updates: updates, offer: offer),
+);
 
 class UpdateDialog extends StatelessWidget {
-  const UpdateDialog({super.key, required this.updates});
+  const UpdateDialog({super.key, required this.updates, this.offer});
   final UpdateController updates;
+  final AppController? offer;
+
+  Future<void> _skip(BuildContext context, String version) async {
+    final app = offer!;
+    updates.dismiss();
+    Navigator.pop(context);
+    await app.updateSettings(app.settings.copyWith(skippedVersion: version));
+  }
 
   Future<void> _install(BuildContext context) async {
     try {
@@ -174,7 +227,8 @@ class UpdateDialog extends StatelessWidget {
             ? null
             : manualInstallHint(updates.package, updates.path!);
         return AlertDialog(
-          title: Text(u.name),
+          key: const Key('update-dialog'),
+          title: Text(offer != null ? 'Atropos ${u.version} is out' : u.name),
           content: SizedBox(
             width: 520,
             child: Column(
@@ -200,10 +254,13 @@ class UpdateDialog extends StatelessWidget {
                     ),
                     padding: const EdgeInsets.all(12),
                     child: SingleChildScrollView(
-                      child: SelectableText(
-                        u.notes.trim().isEmpty
-                            ? 'No release notes.'
-                            : u.notes.trim(),
+                      child: SelectionArea(
+                        child: u.notes.trim().isEmpty
+                            ? const Text('No release notes.')
+                            : MarkdownText(
+                                key: const Key('update-notes'),
+                                markdown: u.notes.trim(),
+                              ),
                       ),
                     ),
                   ),
@@ -272,13 +329,27 @@ class UpdateDialog extends StatelessWidget {
             ),
           ),
           actions: [
+            if (offer != null && !busy && phase != UpdatePhase.ready)
+              TextButton(
+                key: const Key('update-skip'),
+                onPressed: () => _skip(context, u.version),
+                child: const Text('Skip this version'),
+              )
+            else
+              TextButton(
+                onPressed: () => openUrl(context, u.htmlUrl),
+                child: const Text('Release page'),
+              ),
             TextButton(
-              onPressed: () => openUrl(context, u.htmlUrl),
-              child: const Text('Release page'),
-            ),
-            TextButton(
+              key: const Key('update-later'),
               onPressed: () => Navigator.pop(context),
-              child: Text(busy ? 'Hide' : 'Close'),
+              child: Text(
+                busy
+                    ? 'Hide'
+                    : offer != null
+                    ? 'Later'
+                    : 'Close',
+              ),
             ),
             if (phase == UpdatePhase.ready) ...[
               if (!Platform.isAndroid)
@@ -296,7 +367,7 @@ class UpdateDialog extends StatelessWidget {
               FilledButton(
                 key: const Key('update-download'),
                 onPressed: busy ? null : updates.download,
-                child: const Text('Download'),
+                child: Text(offer != null ? 'Update' : 'Download'),
               ),
           ],
         );

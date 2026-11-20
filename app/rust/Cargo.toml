@@ -1,6 +1,6 @@
 [package]
 name = "atropos_core"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "Core encryption, vault and update logic for the Atropos app"
 license = "MIT"
@@ -35,6 +35,7 @@ pulldown-cmark = { version = "0.13", default-features = false }
 # In-app audio: decoded in memory, played straight to the sound device.
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "aac", "isomp4", "flac", "vorbis", "ogg", "wav", "pcm", "adpcm"] }
 cpal = "0.18"
+kamadak-exif = "0.6"
 
 # PC/SC smartcard readers on desktops (Android reaches cards over NFC instead).
 [target.'cfg(not(target_os = "android"))'.dependencies]

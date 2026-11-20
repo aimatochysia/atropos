@@ -33,6 +33,47 @@ pub struct EntryInfo {
     pub executable: bool,
     /// Number of direct children, for folders.
     pub children: u32,
+    /// The person's "Open as" choice for this file, if any.
+    pub open_as: Option<super::viewer::PreviewKind>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SortBy {
+    #[default]
+    Name,
+    /// The file's own modified date, not when it was added.
+    Modified,
+    /// File type (extension), then name.
+    Type,
+    Size,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub struct SortOrder {
+    pub by: SortBy,
+    pub descending: bool,
+}
+
+fn natural_key(name: &str) -> String {
+    name.to_lowercase()
+}
+
+/// Folders first (always), then by `order`; ties go by name.
+pub(crate) fn sort_entries(items: &mut [EntryInfo], order: SortOrder) {
+    items.sort_by(|a, b| {
+        let folder = (a.kind != EntryKind::Folder).cmp(&(b.kind != EntryKind::Folder));
+        let by_name = || natural_key(&a.name).cmp(&natural_key(&b.name));
+        let key = match order.by {
+            SortBy::Name => by_name(),
+            SortBy::Modified => a.modified.cmp(&b.modified).then_with(by_name),
+            SortBy::Size => a.size.cmp(&b.size).then_with(by_name),
+            SortBy::Type => crate::view::extension(&a.name)
+                .cmp(&crate::view::extension(&b.name))
+                .then_with(by_name),
+        };
+        folder.then(if order.descending { key.reverse() } else { key })
+    });
 }
 
 pub struct VaultInfo {
@@ -328,6 +369,52 @@ fn locked() -> CoreError {
     }
 }
 
+/// A file or folder found by name.
+pub struct SearchHit {
+    pub entry: EntryInfo,
+    /// Id of the folder holding it (None = the top level).
+    pub parent: Option<String>,
+    /// The folders it is in, from the top level down.
+    pub folders: Vec<FolderRef>,
+}
+
+/// A folder's id and name.
+pub struct FolderRef {
+    pub id: String,
+    pub name: String,
+}
+
+/// Most search results returned at once.
+const MAX_HITS: usize = 200;
+
+fn entry_info(
+    m: &crate::vault::manifest::Manifest,
+    e: &crate::vault::manifest::Entry,
+) -> EntryInfo {
+    EntryInfo {
+        id: hex::encode(e.id),
+        name: e.name.clone(),
+        kind: match e.kind {
+            Kind::File => EntryKind::File,
+            Kind::Dir => EntryKind::Folder,
+            Kind::Symlink => EntryKind::Link,
+        },
+        size: e.size,
+        modified: e.modified,
+        executable: e.executable,
+        children: if e.kind == Kind::Dir {
+            m.children(Some(e.id)).len() as u32
+        } else {
+            0
+        },
+        open_as: e
+            .open_as
+            .as_deref()
+            .and_then(crate::view::Preview::parse)
+            .map(Into::into),
+    }
+}
+
 impl VaultSession {
     /// Runs `f` on the vault and, when it succeeds, takes the vault out of
     /// this session (which then reads as locked) and returns it.
@@ -399,31 +486,83 @@ impl VaultSession {
         *g = None;
     }
 
-    /// Items directly inside `parent` (None = the top level), folders first.
-    pub fn list(&self, parent: Option<String>) -> CoreResult<Vec<EntryInfo>> {
+    /// Items directly inside `parent` (None = the top level), folders
+    /// first, then in `sort` order (by name when None).
+    pub fn list(
+        &self,
+        parent: Option<String>,
+        sort: Option<SortOrder>,
+    ) -> CoreResult<Vec<EntryInfo>> {
         let parent = parse_parent(parent)?;
         self.with(|v| {
             let m = v.manifest();
             Ok(m.children(parent)
                 .into_iter()
-                .map(|e| EntryInfo {
-                    id: hex::encode(e.id),
-                    name: e.name.clone(),
-                    kind: match e.kind {
-                        Kind::File => EntryKind::File,
-                        Kind::Dir => EntryKind::Folder,
-                        Kind::Symlink => EntryKind::Link,
-                    },
-                    size: e.size,
-                    modified: e.modified,
-                    executable: e.executable,
-                    children: if e.kind == Kind::Dir {
-                        m.children(Some(e.id)).len() as u32
-                    } else {
+                .map(|e| entry_info(m, e))
+                .collect::<Vec<_>>())
+        })
+        .map(|mut items| {
+            sort_entries(&mut items, sort.unwrap_or_default());
+            items
+        })
+    }
+
+    /// Files and folders anywhere in the vault whose name contains `query`
+    /// (ignoring case), best matches first.
+    pub fn search(&self, query: String) -> CoreResult<Vec<SearchHit>> {
+        let q = query.trim().to_lowercase();
+        if q.is_empty() {
+            return Ok(vec![]);
+        }
+        self.with(|v| {
+            let m = v.manifest();
+            let mut hits: Vec<(u8, SearchHit)> = m
+                .entries
+                .values()
+                .filter_map(|e| {
+                    let name = e.name.to_lowercase();
+                    let pos = name.find(&q)?;
+                    let rank = if name == q {
                         0
-                    },
+                    } else if pos == 0 {
+                        1
+                    } else {
+                        2
+                    };
+                    let mut parts = Vec::new();
+                    let mut up = e.parent;
+                    while let Some(p) = up {
+                        let Some(pe) = m.get(&p) else { break };
+                        parts.push(FolderRef {
+                            id: hex::encode(pe.id),
+                            name: pe.name.clone(),
+                        });
+                        up = pe.parent;
+                        if parts.len() > 64 {
+                            break;
+                        }
+                    }
+                    parts.reverse();
+                    Some((
+                        rank,
+                        SearchHit {
+                            entry: entry_info(m, e),
+                            parent: e.parent.map(hex::encode),
+                            folders: parts,
+                        },
+                    ))
                 })
-                .collect())
+                .collect();
+            hits.sort_by(|a, b| {
+                a.0.cmp(&b.0).then_with(|| {
+                    a.1.entry
+                        .name
+                        .to_lowercase()
+                        .cmp(&b.1.entry.name.to_lowercase())
+                })
+            });
+            hits.truncate(MAX_HITS);
+            Ok(hits.into_iter().map(|(_, h)| h).collect())
         })
     }
 

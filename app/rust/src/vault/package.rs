@@ -641,6 +641,7 @@ fn extract_to_vault(
             link_target: item.link_target.clone(),
             data: None,
             sha256: None,
+            open_as: None,
         };
         p.current = name.clone();
         created.push(id);
@@ -804,6 +805,10 @@ pub struct PackageItem {
 /// and each file is decrypted chunk by chunk straight from the package
 /// when it is viewed. Nothing is written anywhere.
 pub struct PackageReader {
+    path: PathBuf,
+    header: Header,
+    raw_key: Zeroizing<[u8; 32]>,
+    index: Vec<Item>,
     file: fs::File,
     key: crate::crypto::aead::AeadKey,
     prefix: [u8; PREFIX_LEN],
@@ -821,9 +826,16 @@ impl PackageReader {
     /// Opens `path` for browsing. Checks the final chunk too, so a cut-off
     /// package is caught here rather than on some later file.
     pub fn open(path: &Path, key: PackageKey) -> CoreResult<Self> {
+        Self::open_inner(path, |h| stream_key(h, &key))
+    }
+
+    fn open_inner(
+        path: &Path,
+        key: impl FnOnce(&Header) -> CoreResult<Zeroizing<[u8; 32]>>,
+    ) -> CoreResult<Self> {
         let mut file = fs::File::open(path)?;
         let (header, aad) = read_header(&mut BufReader::new(&mut file))?;
-        let k = stream_key(&header, &key)?;
+        let k = key(&header)?;
         let prefix: [u8; PREFIX_LEN] = header
             .prefix
             .as_slice()
@@ -833,6 +845,10 @@ impl PackageReader {
         let total = file.metadata()?.len();
         let sealed = total.checked_sub(start).ok_or(CoreError::DecryptFailed)?;
         let mut r = PackageReader {
+            path: path.to_path_buf(),
+            header,
+            raw_key: k.clone(),
+            index: Vec::new(),
             file,
             key: crate::crypto::aead::AeadKey::new(&k)?,
             prefix,
@@ -856,6 +872,7 @@ impl PackageReader {
         let index: Vec<Item> = serde_json::from_slice(&ij).map_err(|_| CoreError::DecryptFailed)?;
         validate(&index)?;
         let mut off = 8 + len;
+        r.index = index.clone();
         for item in index {
             r.offsets
                 .push(if item.kind == Kind::File { off } else { 0 });
@@ -922,6 +939,77 @@ impl PackageReader {
         Ok(())
     }
 
+    /// Writes the package again with file `index` holding `data`, under the
+    /// same lock (passphrase or vault) and a fresh nonce prefix. The new
+    /// package is written beside the old one and then swapped in, so a crash
+    /// leaves either the old or the new package, never half of one.
+    pub fn replace_file(&mut self, index: usize, data: &[u8]) -> CoreResult<()> {
+        if self.items.get(index).map(|i| i.kind) != Some(Kind::File) {
+            return Err(CoreError::InvalidInput {
+                message: "only files can be changed".into(),
+            });
+        }
+        let mut new_index = self.index.clone();
+        new_index[index].size = data.len() as u64;
+        new_index[index].modified = super::now();
+        let prefix = random_array::<PREFIX_LEN>()?;
+        let header = Header {
+            version: 1,
+            lock: self.header.lock.clone(),
+            prefix: prefix.to_vec(),
+        };
+        let hb = header_bytes(&header)?;
+        let mut aad = MAGIC.to_vec();
+        aad.extend_from_slice(&(hb.len() as u32).to_be_bytes());
+        aad.extend_from_slice(&hb);
+        let index_json = Zeroizing::new(serde_json::to_vec(&new_index)?);
+        let data_len: u64 = new_index
+            .iter()
+            .filter(|i| i.kind == Kind::File)
+            .map(|i| i.size)
+            .sum();
+        let plain_len = 8 + index_json.len() as u64 + data_len;
+        let tmp = self.path.with_extension("atropos-part");
+        let key = self.raw_key.clone();
+        let result = (|| -> CoreResult<()> {
+            let mut file = BufWriter::new(fs::File::create(&tmp)?);
+            file.write_all(&aad)?;
+            let mut w = StreamWriter::new(file, &key, prefix, &aad)?;
+            w.write_all(&(index_json.len() as u64).to_be_bytes())?;
+            w.write_all(&index_json)?;
+            for (i, item) in self.index.clone().iter().enumerate() {
+                if item.kind != Kind::File {
+                    continue;
+                }
+                if i == index {
+                    w.write_all(data)?;
+                } else {
+                    self.read_file(i, &mut w)?;
+                }
+            }
+            let pad = padme(plain_len.max(4096)) - plain_len;
+            std::io::copy(&mut std::io::repeat(0).take(pad), &mut w)?;
+            let file = w.finish()?;
+            file.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+            Ok(())
+        })();
+        if let Err(e) = result {
+            let _ = fs::remove_file(&tmp);
+            return Err(e);
+        }
+        // Let go of the old file first (Windows will not replace an open one).
+        self.file = fs::File::open(&tmp)?;
+        if let Err(e) = fs::rename(&tmp, &self.path) {
+            let _ = fs::remove_file(&tmp);
+            self.file = fs::File::open(&self.path)?;
+            return Err(e.into());
+        }
+        // Read the new package back through the same key.
+        let path = self.path.clone();
+        *self = PackageReader::open_inner(&path, |_| Ok(key))?;
+        Ok(())
+    }
+
     /// Decrypts item `index` (a file) into `out`.
     pub fn read_file(&mut self, index: usize, out: &mut dyn Write) -> CoreResult<()> {
         let item = self.items.get(index).ok_or(CoreError::InvalidInput {
@@ -977,5 +1065,30 @@ mod reader_tests {
         let cut = tmp.path().join("cut.atropos");
         fs::write(&cut, &bytes[..bytes.len() - 100]).unwrap();
         assert!(PackageReader::open(&cut, PackageKey::Passphrase(PW)).is_err());
+
+        // Edit one file in place; the rest stays as it was.
+        r.replace_file(n, b"secret note, edited").unwrap();
+        let mut r = PackageReader::open(&pkg, PackageKey::Passphrase(PW)).unwrap();
+        let n = find(&r, "note.txt");
+        let mut out = Vec::new();
+        r.read_file(n, &mut out).unwrap();
+        assert_eq!(out, b"secret note, edited");
+        out.clear();
+        r.read_file(find(&r, "a.bin"), &mut out).unwrap();
+        assert_eq!(out, big);
+        assert!(!pkg.with_extension("atropos-part").exists());
+        // Still opens with the same passphrase, and extracts.
+        let dest = tmp.path().join("out");
+        open(
+            &pkg,
+            PackageKey::Passphrase(PW),
+            Destination::Folder(&dest),
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(dest.join("photos/note.txt")).unwrap(),
+            b"secret note, edited"
+        );
     }
 }

@@ -293,10 +293,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInfo dco_decode_box_autoadd_platform_info(dynamic raw);
 
   @protected
+  PreviewKind dco_decode_box_autoadd_preview_kind(dynamic raw);
+
+  @protected
   ProgressInfo dco_decode_box_autoadd_progress_info(dynamic raw);
 
   @protected
   ReleaseAsset dco_decode_box_autoadd_release_asset(dynamic raw);
+
+  @protected
+  SortOrder dco_decode_box_autoadd_sort_order(dynamic raw);
 
   @protected
   int dco_decode_box_autoadd_u_8(dynamic raw);
@@ -320,6 +326,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   CoreError dco_decode_core_error(dynamic raw);
 
   @protected
+  DetailRow dco_decode_detail_row(dynamic raw);
+
+  @protected
   DownloadProgress dco_decode_download_progress(dynamic raw);
 
   @protected
@@ -332,13 +341,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   double dco_decode_f_64(dynamic raw);
 
   @protected
+  FolderRef dco_decode_folder_ref(dynamic raw);
+
+  @protected
   int dco_decode_i_32(dynamic raw);
 
   @protected
   PlatformInt64 dco_decode_i_64(dynamic raw);
 
   @protected
+  ImageEdit dco_decode_image_edit(dynamic raw);
+
+  @protected
   PlatformInt64 dco_decode_isize(dynamic raw);
+
+  @protected
+  KnownPackage dco_decode_known_package(dynamic raw);
 
   @protected
   KnownVault dco_decode_known_vault(dynamic raw);
@@ -350,7 +368,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<CardSlotInfo> dco_decode_list_card_slot_info(dynamic raw);
 
   @protected
+  List<DetailRow> dco_decode_list_detail_row(dynamic raw);
+
+  @protected
   List<EntryInfo> dco_decode_list_entry_info(dynamic raw);
+
+  @protected
+  List<FolderRef> dco_decode_list_folder_ref(dynamic raw);
+
+  @protected
+  List<ImageEdit> dco_decode_list_image_edit(dynamic raw);
+
+  @protected
+  List<KnownPackage> dco_decode_list_known_package(dynamic raw);
 
   @protected
   List<KnownVault> dco_decode_list_known_vault(dynamic raw);
@@ -360,6 +390,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<MdSpan> dco_decode_list_md_span(dynamic raw);
+
+  @protected
+  List<OpenAsRule> dco_decode_list_open_as_rule(dynamic raw);
+
+  @protected
+  List<PdfMatch> dco_decode_list_pdf_match(dynamic raw);
 
   @protected
   List<PictureSize> dco_decode_list_picture_size(dynamic raw);
@@ -374,6 +410,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  List<SearchHit> dco_decode_list_search_hit(dynamic raw);
+
+  @protected
   List<SelfTestStep> dco_decode_list_self_test_step(dynamic raw);
 
   @protected
@@ -384,6 +423,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   MdSpan dco_decode_md_span(dynamic raw);
+
+  @protected
+  OpenAsRule dco_decode_open_as_rule(dynamic raw);
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
@@ -404,10 +446,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
 
   @protected
+  PreviewKind? dco_decode_opt_box_autoadd_preview_kind(dynamic raw);
+
+  @protected
   ProgressInfo? dco_decode_opt_box_autoadd_progress_info(dynamic raw);
 
   @protected
   ReleaseAsset? dco_decode_opt_box_autoadd_release_asset(dynamic raw);
+
+  @protected
+  SortOrder? dco_decode_opt_box_autoadd_sort_order(dynamic raw);
 
   @protected
   int? dco_decode_opt_box_autoadd_u_8(dynamic raw);
@@ -426,6 +474,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PasswordStrength dco_decode_password_strength(dynamic raw);
+
+  @protected
+  PdfMatch dco_decode_pdf_match(dynamic raw);
 
   @protected
   PictureSize dco_decode_picture_size(dynamic raw);
@@ -449,10 +500,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RepairInfo dco_decode_repair_info(dynamic raw);
 
   @protected
+  SearchHit dco_decode_search_hit(dynamic raw);
+
+  @protected
   SelfTestReport dco_decode_self_test_report(dynamic raw);
 
   @protected
   SelfTestStep dco_decode_self_test_step(dynamic raw);
+
+  @protected
+  SortBy dco_decode_sort_by(dynamic raw);
+
+  @protected
+  SortOrder dco_decode_sort_order(dynamic raw);
 
   @protected
   Strength dco_decode_strength(dynamic raw);
@@ -477,6 +537,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void dco_decode_unit(dynamic raw);
+
+  @protected
+  UpdateCheck dco_decode_update_check(dynamic raw);
 
   @protected
   UpdateInfo dco_decode_update_info(dynamic raw);
@@ -717,6 +780,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  PreviewKind sse_decode_box_autoadd_preview_kind(SseDeserializer deserializer);
+
+  @protected
   ProgressInfo sse_decode_box_autoadd_progress_info(
     SseDeserializer deserializer,
   );
@@ -725,6 +791,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ReleaseAsset sse_decode_box_autoadd_release_asset(
     SseDeserializer deserializer,
   );
+
+  @protected
+  SortOrder sse_decode_box_autoadd_sort_order(SseDeserializer deserializer);
 
   @protected
   int sse_decode_box_autoadd_u_8(SseDeserializer deserializer);
@@ -748,6 +817,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   CoreError sse_decode_core_error(SseDeserializer deserializer);
 
   @protected
+  DetailRow sse_decode_detail_row(SseDeserializer deserializer);
+
+  @protected
   DownloadProgress sse_decode_download_progress(SseDeserializer deserializer);
 
   @protected
@@ -760,13 +832,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   double sse_decode_f_64(SseDeserializer deserializer);
 
   @protected
+  FolderRef sse_decode_folder_ref(SseDeserializer deserializer);
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
 
   @protected
+  ImageEdit sse_decode_image_edit(SseDeserializer deserializer);
+
+  @protected
   PlatformInt64 sse_decode_isize(SseDeserializer deserializer);
+
+  @protected
+  KnownPackage sse_decode_known_package(SseDeserializer deserializer);
 
   @protected
   KnownVault sse_decode_known_vault(SseDeserializer deserializer);
@@ -780,7 +861,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<DetailRow> sse_decode_list_detail_row(SseDeserializer deserializer);
+
+  @protected
   List<EntryInfo> sse_decode_list_entry_info(SseDeserializer deserializer);
+
+  @protected
+  List<FolderRef> sse_decode_list_folder_ref(SseDeserializer deserializer);
+
+  @protected
+  List<ImageEdit> sse_decode_list_image_edit(SseDeserializer deserializer);
+
+  @protected
+  List<KnownPackage> sse_decode_list_known_package(
+    SseDeserializer deserializer,
+  );
 
   @protected
   List<KnownVault> sse_decode_list_known_vault(SseDeserializer deserializer);
@@ -790,6 +885,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<MdSpan> sse_decode_list_md_span(SseDeserializer deserializer);
+
+  @protected
+  List<OpenAsRule> sse_decode_list_open_as_rule(SseDeserializer deserializer);
+
+  @protected
+  List<PdfMatch> sse_decode_list_pdf_match(SseDeserializer deserializer);
 
   @protected
   List<PictureSize> sse_decode_list_picture_size(SseDeserializer deserializer);
@@ -804,6 +905,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
+  List<SearchHit> sse_decode_list_search_hit(SseDeserializer deserializer);
+
+  @protected
   List<SelfTestStep> sse_decode_list_self_test_step(
     SseDeserializer deserializer,
   );
@@ -816,6 +920,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   MdSpan sse_decode_md_span(SseDeserializer deserializer);
+
+  @protected
+  OpenAsRule sse_decode_open_as_rule(SseDeserializer deserializer);
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
@@ -836,12 +943,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
+  PreviewKind? sse_decode_opt_box_autoadd_preview_kind(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   ProgressInfo? sse_decode_opt_box_autoadd_progress_info(
     SseDeserializer deserializer,
   );
 
   @protected
   ReleaseAsset? sse_decode_opt_box_autoadd_release_asset(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  SortOrder? sse_decode_opt_box_autoadd_sort_order(
     SseDeserializer deserializer,
   );
 
@@ -866,6 +983,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PasswordStrength sse_decode_password_strength(SseDeserializer deserializer);
 
   @protected
+  PdfMatch sse_decode_pdf_match(SseDeserializer deserializer);
+
+  @protected
   PictureSize sse_decode_picture_size(SseDeserializer deserializer);
 
   @protected
@@ -887,10 +1007,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RepairInfo sse_decode_repair_info(SseDeserializer deserializer);
 
   @protected
+  SearchHit sse_decode_search_hit(SseDeserializer deserializer);
+
+  @protected
   SelfTestReport sse_decode_self_test_report(SseDeserializer deserializer);
 
   @protected
   SelfTestStep sse_decode_self_test_step(SseDeserializer deserializer);
+
+  @protected
+  SortBy sse_decode_sort_by(SseDeserializer deserializer);
+
+  @protected
+  SortOrder sse_decode_sort_order(SseDeserializer deserializer);
 
   @protected
   Strength sse_decode_strength(SseDeserializer deserializer);
@@ -915,6 +1044,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_decode_unit(SseDeserializer deserializer);
+
+  @protected
+  UpdateCheck sse_decode_update_check(SseDeserializer deserializer);
 
   @protected
   UpdateInfo sse_decode_update_info(SseDeserializer deserializer);
@@ -1208,6 +1340,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_preview_kind(
+    PreviewKind self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_progress_info(
     ProgressInfo self,
     SseSerializer serializer,
@@ -1216,6 +1354,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_release_asset(
     ReleaseAsset self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_sort_order(
+    SortOrder self,
     SseSerializer serializer,
   );
 
@@ -1247,6 +1391,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_core_error(CoreError self, SseSerializer serializer);
 
   @protected
+  void sse_encode_detail_row(DetailRow self, SseSerializer serializer);
+
+  @protected
   void sse_encode_download_progress(
     DownloadProgress self,
     SseSerializer serializer,
@@ -1262,13 +1409,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_f_64(double self, SseSerializer serializer);
 
   @protected
+  void sse_encode_folder_ref(FolderRef self, SseSerializer serializer);
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
 
   @protected
+  void sse_encode_image_edit(ImageEdit self, SseSerializer serializer);
+
+  @protected
   void sse_encode_isize(PlatformInt64 self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_known_package(KnownPackage self, SseSerializer serializer);
 
   @protected
   void sse_encode_known_vault(KnownVault self, SseSerializer serializer);
@@ -1283,8 +1439,32 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_detail_row(
+    List<DetailRow> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_entry_info(
     List<EntryInfo> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_folder_ref(
+    List<FolderRef> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_image_edit(
+    List<ImageEdit> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_known_package(
+    List<KnownPackage> self,
     SseSerializer serializer,
   );
 
@@ -1299,6 +1479,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_list_md_span(List<MdSpan> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_open_as_rule(
+    List<OpenAsRule> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_pdf_match(List<PdfMatch> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_picture_size(
@@ -1322,6 +1511,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_search_hit(
+    List<SearchHit> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_self_test_step(
     List<SelfTestStep> self,
     SseSerializer serializer,
@@ -1335,6 +1530,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_md_span(MdSpan self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_open_as_rule(OpenAsRule self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
@@ -1360,6 +1558,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_preview_kind(
+    PreviewKind? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_progress_info(
     ProgressInfo? self,
     SseSerializer serializer,
@@ -1368,6 +1572,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_release_asset(
     ReleaseAsset? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_sort_order(
+    SortOrder? self,
     SseSerializer serializer,
   );
 
@@ -1396,6 +1606,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_pdf_match(PdfMatch self, SseSerializer serializer);
+
+  @protected
   void sse_encode_picture_size(PictureSize self, SseSerializer serializer);
 
   @protected
@@ -1420,6 +1633,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_repair_info(RepairInfo self, SseSerializer serializer);
 
   @protected
+  void sse_encode_search_hit(SearchHit self, SseSerializer serializer);
+
+  @protected
   void sse_encode_self_test_report(
     SelfTestReport self,
     SseSerializer serializer,
@@ -1427,6 +1643,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_self_test_step(SelfTestStep self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_sort_by(SortBy self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_sort_order(SortOrder self, SseSerializer serializer);
 
   @protected
   void sse_encode_strength(Strength self, SseSerializer serializer);
@@ -1451,6 +1673,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_unit(void self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_update_check(UpdateCheck self, SseSerializer serializer);
 
   @protected
   void sse_encode_update_info(UpdateInfo self, SseSerializer serializer);

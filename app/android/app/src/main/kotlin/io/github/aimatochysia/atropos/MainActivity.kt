@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.view.WindowManager
 import java.io.File
@@ -74,6 +75,24 @@ class MainActivity : FlutterFragmentActivity() {
                             result.error("picker", e.message, null)
                         }
                     }
+                    // Opens the system file picker and answers with the picked
+                    // file's real path, or null when it has none (then Dart falls
+                    // back to a temporary copy).
+                    "pickFilePath" -> {
+                        pendingPick?.success(null)
+                        pendingPick = result
+                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "*/*"
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        try {
+                            startActivityForResult(intent, PICK_FILE)
+                        } catch (e: Exception) {
+                            pendingPick = null
+                            result.error("picker", e.message, null)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -115,7 +134,7 @@ class MainActivity : FlutterFragmentActivity() {
 
     @Deprecated("Uses the platform activity result API for a single request.")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        if (requestCode != PICK_DIRECTORY) {
+        if (requestCode != PICK_DIRECTORY && requestCode != PICK_FILE) {
             super.onActivityResult(requestCode, resultCode, data)
             return
         }
@@ -124,6 +143,24 @@ class MainActivity : FlutterFragmentActivity() {
         val uri = data?.data
         if (resultCode != RESULT_OK || uri == null) {
             result.success(null)
+            return
+        }
+        if (requestCode == PICK_FILE) {
+            val path = documentUriToPath(uri)
+            if (path != null) {
+                result.success(path)
+                return
+            }
+            // No real path (cloud or app storage): hand over a temporary copy,
+            // marked "copy:" so Dart deletes it afterwards.
+            Thread {
+                try {
+                    val copy = copyToCache(uri)
+                    runOnUiThread { result.success("copy:" + copy.path) }
+                } catch (e: Exception) {
+                    runOnUiThread { result.error("picker", e.message, null) }
+                }
+            }.start()
             return
         }
         val path = treeUriToPath(uri)
@@ -145,7 +182,35 @@ class MainActivity : FlutterFragmentActivity() {
         } catch (_: Exception) {
             return null
         }
-        return when (uri.authority) {
+        return docIdToPath(uri.authority, docId)?.takeIf { File(it).isDirectory }
+    }
+
+    /** Maps a picked document's URI to its filesystem path, when it has one. */
+    private fun documentUriToPath(uri: Uri): String? {
+        val docId = try {
+            DocumentsContract.getDocumentId(uri)
+        } catch (_: Exception) {
+            return null
+        }
+        return docIdToPath(uri.authority, docId)?.takeIf { File(it).isFile }
+    }
+
+    private fun copyToCache(uri: Uri): File {
+        var name = "picked.atropos"
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { c -> if (c.moveToFirst()) c.getString(0)?.let { name = it } }
+        val dir = File(cacheDir, "picked").apply { mkdirs() }
+        val safe = name.replace('/', '_').ifEmpty { "picked.atropos" }
+        val out = File(dir, "${System.currentTimeMillis()}-$safe")
+        contentResolver.openInputStream(uri).use { input ->
+            requireNotNull(input) { "The file could not be read." }
+            out.outputStream().use { input.copyTo(it) }
+        }
+        return out
+    }
+
+    private fun docIdToPath(authority: String?, docId: String): String? {
+        return when (authority) {
             "com.android.externalstorage.documents" -> {
                 val volume = docId.substringBefore(':')
                 val rel = docId.substringAfter(':', "")
@@ -163,7 +228,7 @@ class MainActivity : FlutterFragmentActivity() {
                 else -> null
             }
             else -> null
-        }?.takeIf { File(it).isDirectory }
+        }
     }
 
     private fun installApk(file: File): String {
@@ -219,3 +284,4 @@ class MainActivity : FlutterFragmentActivity() {
 }
 
 private const val PICK_DIRECTORY = 4101
+private const val PICK_FILE = 4102
