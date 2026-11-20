@@ -9,6 +9,7 @@ import '../src/rust/api/vault.dart';
 import '../src/rust/api/viewer.dart';
 import '../state/app_controller.dart';
 import 'card_flows.dart';
+import 'check_page.dart';
 import 'package_flows.dart';
 import 'recovery_page.dart';
 import 'secret_dialog.dart';
@@ -704,6 +705,15 @@ class _VaultPageState extends State<VaultPage> {
                     onSelected: (v) => switch (v) {
                       'info' => _info(),
                       'password' => _changePassword(),
+                      'strength' => passwordStrengthFlow(context, _s),
+                      'check' =>
+                        Navigator.of(context)
+                            .push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => CheckPage(session: _s),
+                              ),
+                            )
+                            .then((_) => _reload()),
                       'recovery' => _newRecovery(),
                       'biometric' => _biometricSettings(),
                       'cards' => Navigator.of(context).push(
@@ -729,6 +739,10 @@ class _VaultPageState extends State<VaultPage> {
                         child: Text('Change password'),
                       ),
                       PopupMenuItem(
+                        value: 'strength',
+                        child: Text('Password protection'),
+                      ),
+                      PopupMenuItem(
                         value: 'recovery',
                         child: Text('New recovery phrase'),
                       ),
@@ -739,6 +753,10 @@ class _VaultPageState extends State<VaultPage> {
                       PopupMenuItem(
                         value: 'cards',
                         child: Text('Security cards'),
+                      ),
+                      PopupMenuItem(
+                        value: 'check',
+                        child: Text('Check and repair'),
                       ),
                     ],
                   ),
@@ -754,6 +772,7 @@ class _VaultPageState extends State<VaultPage> {
               ),
         body: Column(
           children: [
+            DamagedBanner(session: _s),
             _Breadcrumbs(
               root: _s.name,
               crumbs: _crumbs.map((c) => c.name).toList(),

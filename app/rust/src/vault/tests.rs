@@ -317,3 +317,178 @@ fn card_slot_round_trip_with_simulated_card() {
     v.remove_card(&id).unwrap();
     assert!(v.cards().is_empty());
 }
+
+/// Makes `path` look `secs` seconds old.
+fn age(path: &Path, secs: i64) {
+    set_mtime(path, now() - secs);
+}
+
+fn all_files(dir: &Path) -> Vec<PathBuf> {
+    walk(dir).into_iter().filter(|p| p.is_file()).collect()
+}
+
+#[test]
+fn check_finds_and_repair_fixes_crash_leftovers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    tree(&src);
+    let vpath = tmp.path().join("v");
+    let (mut v, _) = Vault::create(&vpath, PW, fast()).unwrap();
+    v.import(&[src.join("proj")], None, false, &mut |_| {})
+        .unwrap();
+
+    let clean = v.check(&mut |_| {}).unwrap();
+    assert!(clean.is_clean(), "{clean:?}");
+    assert!(clean.files_checked >= 3);
+
+    // An import that crashed: a blob written but never listed, and temp
+    // files from interrupted writes. Fresh ones may belong to another
+    // device still syncing, so they are left alone until they are old.
+    let orphan = blob::write_blob(
+        &vpath.join(OBJECTS_DIR),
+        v.vault_id(),
+        &v.public_key().unwrap(),
+        &b"never listed"[..],
+        12,
+    )
+    .unwrap();
+    let orphan_path = blob::blob_path(&vpath.join(OBJECTS_DIR), &orphan);
+    let seg_tmp = vpath
+        .join(MANIFEST_DIR)
+        .join("0000000000000099-deadbeef.tmp");
+    fs::write(&seg_tmp, b"half written").unwrap();
+    let r = v.check(&mut |_| {}).unwrap();
+    assert!(r.is_clean(), "fresh files are not leftovers yet: {r:?}");
+
+    age(&orphan_path, 2 * 24 * 3600);
+    age(&seg_tmp, 2 * 3600);
+    let r = v.check(&mut |_| {}).unwrap();
+    assert_eq!(r.orphans, vec![orphan_path.clone()]);
+    assert_eq!(r.leftovers, vec![seg_tmp.clone()]);
+    let fixed = v.repair(false).unwrap();
+    assert_eq!(fixed.deleted_orphans, 1);
+    assert_eq!(fixed.deleted_leftovers, 1);
+    assert!(!orphan_path.exists() && !seg_tmp.exists());
+    assert!(v.check(&mut |_| {}).unwrap().is_clean());
+    // Repair needs a fresh check each time.
+    v.repair(false).unwrap();
+    assert!(v.repair(false).is_err());
+}
+
+#[test]
+fn check_reports_damaged_and_missing_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    tree(&src);
+    let vpath = tmp.path().join("v");
+    let (mut v, _) = Vault::create(&vpath, PW, fast()).unwrap();
+    v.import(&[src.join("proj")], None, false, &mut |_| {})
+        .unwrap();
+    let blobs: Vec<PathBuf> = all_files(&vpath.join(OBJECTS_DIR));
+    assert!(blobs.len() >= 2);
+    // Flip a byte in one blob and delete another.
+    let mut bytes = fs::read(&blobs[0]).unwrap();
+    let n = bytes.len();
+    bytes[n - 20] ^= 1;
+    fs::write(&blobs[0], bytes).unwrap();
+    fs::remove_file(&blobs[1]).unwrap();
+    drop(v);
+    let mut v = Vault::unlock(&vpath, &Unlock::Password(PW)).unwrap();
+    let r = v.check(&mut |_| {}).unwrap();
+    assert!(!r.damaged.is_empty(), "{r:?}");
+    assert!(!r.missing.is_empty(), "{r:?}");
+    let before = v.manifest().entries.len();
+
+    // Without permission nothing is taken off the list.
+    v.repair(false).unwrap();
+    assert_eq!(v.manifest().entries.len(), before);
+
+    v.check(&mut |_| {}).unwrap();
+    let fixed = v.repair(true).unwrap();
+    assert_eq!(
+        fixed.removed_entries as usize,
+        r.damaged.len() + r.missing.len()
+    );
+    assert!(!blobs[0].exists(), "the damaged blob is deleted");
+    assert!(v.check(&mut |_| {}).unwrap().is_clean());
+}
+
+#[test]
+fn a_damaged_file_list_segment_does_not_lock_you_out() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    tree(&src);
+    let vpath = tmp.path().join("v");
+    let (mut v, _) = Vault::create(&vpath, PW, fast()).unwrap();
+    v.create_folder(None, "kept").unwrap();
+    v.import(&[src.join("proj")], None, false, &mut |_| {})
+        .unwrap();
+    let mut segs = all_files(&vpath.join(MANIFEST_DIR));
+    segs.sort();
+    assert!(segs.len() >= 2);
+    drop(v);
+    // Break the last segment (the import), as a bad sync might.
+    fs::write(segs.last().unwrap(), b"garbage garbage garbage").unwrap();
+    let mut v = Vault::unlock(&vpath, &Unlock::Password(PW)).unwrap();
+    assert_eq!(v.manifest().damaged.len(), 1);
+    assert!(v.manifest().children(None).iter().any(|e| e.name == "kept"));
+    let r = v.check(&mut |_| {}).unwrap();
+    assert_eq!(r.damaged_segments.len(), 1);
+    // The import's blobs now look unlisted; old enough, they are orphans.
+    for b in all_files(&vpath.join(OBJECTS_DIR)) {
+        age(&b, 3 * 24 * 3600);
+    }
+    let r = v.check(&mut |_| {}).unwrap();
+    assert!(!r.orphans.is_empty());
+    let fixed = v.repair(false).unwrap();
+    assert_eq!(fixed.segments_set_aside, 1);
+    assert_eq!(all_files(&vpath.join(check::DAMAGED_DIR)).len(), 1);
+    drop(v);
+    let mut v = Vault::unlock(&vpath, &Unlock::Password(PW)).unwrap();
+    assert!(v.manifest().damaged.is_empty());
+    assert!(v.check(&mut |_| {}).unwrap().is_clean());
+
+    // If nothing at all can be read, unlocking fails instead of showing an
+    // empty vault that could then overwrite the real list.
+    drop(v);
+    for s in all_files(&vpath.join(MANIFEST_DIR)) {
+        fs::write(s, b"garbage garbage garbage").unwrap();
+    }
+    assert!(Vault::unlock(&vpath, &Unlock::Password(PW)).is_err());
+}
+
+#[test]
+fn lost_items_move_to_the_top() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vpath = tmp.path().join("v");
+    let (mut v, _) = Vault::create(&vpath, PW, fast()).unwrap();
+    let a = v.create_folder(None, "a").unwrap();
+    let b = v.create_folder(Some(a), "b").unwrap();
+    // A sync that brought the child but lost its parent.
+    v.manifest.commit(vec![Record::Remove { id: a }]).unwrap();
+    let r = v.check(&mut |_| {}).unwrap();
+    assert_eq!(r.lost.len(), 1);
+    assert_eq!(v.repair(false).unwrap().moved_to_top, 1);
+    assert_eq!(v.manifest().get(&b).unwrap().parent, None);
+}
+
+#[test]
+fn password_cost_can_change_with_the_password() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vpath = tmp.path().join("v");
+    let (mut v, _) = Vault::create(&vpath, PW, fast()).unwrap();
+    assert_eq!(v.password_cost(), Some(fast()));
+    let light = Argon2Cost {
+        memory_kib: 64 * 1024,
+        iterations: 2,
+        parallelism: 1,
+    };
+    assert!(v
+        .set_password_cost(b"not the password at all", light)
+        .is_err());
+    v.set_password_cost(PW, light).unwrap();
+    assert_eq!(v.password_cost(), Some(light));
+    drop(v);
+    let v = Vault::unlock(&vpath, &Unlock::Password(PW)).unwrap();
+    assert_eq!(v.password_cost(), Some(light));
+}

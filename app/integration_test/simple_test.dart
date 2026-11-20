@@ -7,11 +7,13 @@ import 'package:atropos/core/biometrics.dart';
 import 'package:atropos/core/crypto_service.dart';
 import 'package:atropos/core/platform_files.dart';
 import 'package:atropos/src/rust/api/card.dart' as card;
+import 'package:atropos/src/rust/api/maintenance.dart';
 import 'package:atropos/src/rust/api/secure_input.dart';
 import 'package:atropos/src/rust/api/vault.dart';
 import 'package:atropos/src/rust/api/viewer.dart';
 import 'package:atropos/src/rust/frb_generated.dart';
 import 'package:atropos/state/app_controller.dart';
+import 'package:atropos/ui/check_page.dart';
 import 'package:atropos/ui/selftest_page.dart';
 import 'package:atropos/ui/viewer_page.dart';
 import 'package:flutter/material.dart';
@@ -405,5 +407,78 @@ void main() {
     await controller.lockAll();
     await expectLater(v.text(), throwsA(anything));
     await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('check finds a damaged file and repair removes it', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(900, 1800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final src = Directory('${tmp.path}/src')..createSync();
+    File('${src.path}/a.txt').writeAsStringSync('alpha');
+    File('${src.path}/big.bin')
+        .writeAsBytesSync(List.generate(200 * 1024, (i) => i % 251));
+    final created = await createVault(
+      parentDir: tmp.path,
+      name: 'Check',
+      password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+    );
+    final s = created.session;
+    await finish(
+      s.import_(
+        sources: ['${src.path}/a.txt', '${src.path}/big.bin'],
+        deleteOriginals: false,
+      ),
+    );
+    expect(s.damagedParts(), 0);
+    expect(await s.passwordStrength(), PasswordStrength.standard);
+    final ms = await s.setPasswordStrength(
+      password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+      strength: PasswordStrength.light,
+    );
+    expect(ms, greaterThan(0));
+    expect(await s.passwordStrength(), PasswordStrength.light);
+
+    final controller = AppController(
+      store: RustSettingsStore('${tmp.path}/config'),
+      files: TempFiles(tmp.path),
+    );
+    await controller.load();
+    Future<void> showCheck() => tester.pumpWidget(
+      AppScope(
+        controller: controller,
+        child: MaterialApp(
+          home: CheckPage(key: UniqueKey(), session: s),
+        ),
+      ),
+    );
+    await showCheck();
+    await pumpUntil(tester, find.byKey(const Key('check-clean')));
+
+    // Corrupt the big file's blob (the largest file in objects/).
+    final blobs =
+        Directory('${tmp.path}/Check/objects')
+            .listSync(recursive: true)
+            .whereType<File>()
+            .toList()
+          ..sort((a, b) => b.lengthSync().compareTo(a.lengthSync()));
+    final bytes = blobs.first.readAsBytesSync();
+    bytes[bytes.length - 100] ^= 1;
+    blobs.first.writeAsBytesSync(bytes);
+
+    await showCheck();
+    await pumpUntil(tester, find.byKey(const Key('check-problems')));
+    expect(find.textContaining('Damaged files (1)'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('check-remove-broken')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('check-repair')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove'));
+    await pumpUntil(tester, find.byKey(const Key('check-clean')));
+    expect(find.textContaining('Removed 1 file'), findsOneWidget);
+    expect((await s.list()).map((e) => e.name), ['a.txt']);
+    await tester.pumpWidget(const SizedBox());
+    await s.lock();
   });
 }

@@ -72,7 +72,7 @@ pub struct PackageInfo {
     pub vault_id: String,
 }
 
-fn progress_info(p: &Progress) -> ProgressInfo {
+pub(crate) fn progress_info(p: &Progress) -> ProgressInfo {
     ProgressInfo {
         files_done: p.files_done,
         files_total: p.files_total,
@@ -292,6 +292,12 @@ fn locked() -> CoreError {
 }
 
 impl VaultSession {
+    /// Like `with`, but gives up instead of waiting while a task runs.
+    pub(crate) fn try_with<T>(&self, f: impl FnOnce(&Vault) -> T) -> Option<T> {
+        let g = self.inner.try_lock().ok()?;
+        g.as_ref().map(f)
+    }
+
     pub(crate) fn with<T>(&self, f: impl FnOnce(&mut Vault) -> CoreResult<T>) -> CoreResult<T> {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let v = g.as_mut().ok_or_else(locked)?;

@@ -6,6 +6,7 @@
 import '../error.dart';
 import '../frb_generated.dart';
 import 'card.dart';
+import 'maintenance.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
@@ -14,7 +15,7 @@ import 'secure_input.dart';
 import 'viewer.dart';
 part 'vault.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `locked`, `outcome_info`, `parse_device`, `parse_id`, `parse_ids`, `parse_parent`, `progress_info`, `reporter`, `session_of`, `session`, `strong_session`, `strong`, `vault_name`, `with`, `wrong_secret`
+// These functions are ignored because they are not marked as `pub`: `locked`, `outcome_info`, `parse_device`, `parse_id`, `parse_ids`, `parse_parent`, `progress_info`, `reporter`, `session_of`, `session`, `strong_session`, `strong`, `try_with`, `vault_name`, `with`, `wrong_secret`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `eq`, `fmt`
 
 /// Whether `path` is an Atropos vault folder.
@@ -124,10 +125,18 @@ abstract class VaultSession implements RustOpaqueInterface {
 
   Future<void> changePassword({required SecretInput newPassword});
 
+  /// Decrypts every file and looks for damage or leftovers. The report is
+  /// kept for [VaultSession::repair].
+  Stream<CheckEvent> check();
+
   Future<String> createFolder({String? parent, required String name});
 
   /// When the vault was created (Unix seconds); 0 once locked.
   PlatformInt64 created();
+
+  /// Number of file-list pieces that could not be read when the vault
+  /// opened (0 when all is well). Never blocks.
+  int damagedParts();
 
   Future<void> delete({required List<String> ids});
 
@@ -188,6 +197,8 @@ abstract class VaultSession implements RustOpaqueInterface {
   /// Decrypts file `id` into memory for the viewer.
   Future<FileViewer> openViewer({required String id});
 
+  Future<PasswordStrength> passwordStrength();
+
   String get path;
 
   Future<void> removeCard({required String id});
@@ -196,12 +207,23 @@ abstract class VaultSession implements RustOpaqueInterface {
 
   Future<void> rename({required String id, required String name});
 
+  /// Fixes what the last check found. With `remove_broken`, damaged and
+  /// missing files are taken off the list.
+  Future<RepairInfo> repair({required bool removeBroken});
+
   /// Seals items into one `.atropos` file. With a passphrase anyone who
   /// knows it can open the package; without, only this vault can.
   Stream<TaskEvent> sealPackage({
     required List<String> ids,
     required String outFile,
     SecretInput? passphrase,
+  });
+
+  /// Re-wraps the password slot at `strength`. Returns how long one
+  /// unlock now takes on this device, in milliseconds.
+  Future<int> setPasswordStrength({
+    required SecretInput password,
+    required PasswordStrength strength,
   });
 
   /// Total files and bytes in the vault.

@@ -8,6 +8,7 @@
 
 import 'api/app.dart';
 import 'api/card.dart';
+import 'api/maintenance.dart';
 import 'api/secure_input.dart';
 import 'api/selftest.dart';
 import 'api/settings.dart';
@@ -160,6 +161,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<CheckEvent> dco_decode_StreamSink_check_event_Sse(dynamic raw);
+
+  @protected
   RustStreamSink<DownloadProgress> dco_decode_StreamSink_download_progress_Sse(
     dynamic raw,
   );
@@ -184,6 +188,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   AppSettings dco_decode_box_autoadd_app_settings(dynamic raw);
+
+  @protected
+  CheckReportInfo dco_decode_box_autoadd_check_report_info(dynamic raw);
 
   @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
@@ -211,6 +218,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   CardSlotInfo dco_decode_card_slot_info(dynamic raw);
+
+  @protected
+  CheckEvent dco_decode_check_event(dynamic raw);
+
+  @protected
+  CheckReportInfo dco_decode_check_report_info(dynamic raw);
 
   @protected
   CoreError dco_decode_core_error(dynamic raw);
@@ -309,6 +322,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PackageKind dco_decode_package_kind(dynamic raw);
 
   @protected
+  PasswordStrength dco_decode_password_strength(dynamic raw);
+
+  @protected
   PictureSize dco_decode_picture_size(dynamic raw);
 
   @protected
@@ -325,6 +341,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RenderedPicture dco_decode_rendered_picture(dynamic raw);
+
+  @protected
+  RepairInfo dco_decode_repair_info(dynamic raw);
 
   @protected
   SelfTestReport dco_decode_self_test_report(dynamic raw);
@@ -468,6 +487,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<CheckEvent> sse_decode_StreamSink_check_event_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   RustStreamSink<DownloadProgress> sse_decode_StreamSink_download_progress_Sse(
     SseDeserializer deserializer,
   );
@@ -494,6 +518,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   AppSettings sse_decode_box_autoadd_app_settings(SseDeserializer deserializer);
+
+  @protected
+  CheckReportInfo sse_decode_box_autoadd_check_report_info(
+    SseDeserializer deserializer,
+  );
 
   @protected
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
@@ -527,6 +556,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   CardSlotInfo sse_decode_card_slot_info(SseDeserializer deserializer);
+
+  @protected
+  CheckEvent sse_decode_check_event(SseDeserializer deserializer);
+
+  @protected
+  CheckReportInfo sse_decode_check_report_info(SseDeserializer deserializer);
 
   @protected
   CoreError sse_decode_core_error(SseDeserializer deserializer);
@@ -633,6 +668,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PackageKind sse_decode_package_kind(SseDeserializer deserializer);
 
   @protected
+  PasswordStrength sse_decode_password_strength(SseDeserializer deserializer);
+
+  @protected
   PictureSize sse_decode_picture_size(SseDeserializer deserializer);
 
   @protected
@@ -649,6 +687,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RenderedPicture sse_decode_rendered_picture(SseDeserializer deserializer);
+
+  @protected
+  RepairInfo sse_decode_repair_info(SseDeserializer deserializer);
 
   @protected
   SelfTestReport sse_decode_self_test_report(SseDeserializer deserializer);
@@ -818,6 +859,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_StreamSink_check_event_Sse(
+    RustStreamSink<CheckEvent> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_StreamSink_download_progress_Sse(
     RustStreamSink<DownloadProgress> self,
     SseSerializer serializer,
@@ -848,6 +895,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_app_settings(
     AppSettings self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_check_report_info(
+    CheckReportInfo self,
     SseSerializer serializer,
   );
 
@@ -895,6 +948,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_card_slot_info(CardSlotInfo self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_check_event(CheckEvent self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_check_report_info(
+    CheckReportInfo self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_core_error(CoreError self, SseSerializer serializer);
@@ -1024,6 +1086,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_package_kind(PackageKind self, SseSerializer serializer);
 
   @protected
+  void sse_encode_password_strength(
+    PasswordStrength self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_picture_size(PictureSize self, SseSerializer serializer);
 
   @protected
@@ -1043,6 +1111,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     RenderedPicture self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_repair_info(RepairInfo self, SseSerializer serializer);
 
   @protected
   void sse_encode_self_test_report(

@@ -114,6 +114,8 @@ pub struct Manifest {
     vault_id: Vec<u8>,
     next_seq: u64,
     segments: Vec<PathBuf>,
+    /// Segments that failed to decrypt and were skipped (see [Manifest::load]).
+    pub damaged: Vec<PathBuf>,
     pub entries: BTreeMap<Id, Entry>,
 }
 
@@ -146,22 +148,25 @@ impl Manifest {
         let mut entries = BTreeMap::new();
         let mut segments = Vec::new();
         let mut next_seq = 0;
+        let mut damaged = Vec::new();
         for (seq, _, path) in files {
-            let bytes = fs::read(&path)?;
-            if bytes.len() < 12 {
-                return Err(damaged());
+            next_seq = next_seq.max(seq + 1);
+            match open_segment(&key, vault_id, seq, &path) {
+                Some(segment) => {
+                    if segment.snapshot {
+                        entries.clear();
+                    }
+                    apply(&mut entries, segment.records);
+                    segments.push(path);
+                }
+                // One unreadable segment (a bad sector, a broken sync) must
+                // not lock the person out of everything else; "Check vault"
+                // reports it and can set it aside.
+                None => damaged.push(path),
             }
-            let nonce: [u8; 12] = bytes[..12].try_into().map_err(|_| damaged())?;
-            let plain = key
-                .open(&nonce, &aad(vault_id, seq), &bytes[12..])
-                .map_err(|_| damaged())?;
-            let segment: Segment = serde_json::from_slice(&plain).map_err(|_| damaged())?;
-            if segment.snapshot {
-                entries.clear();
-            }
-            apply(&mut entries, segment.records);
-            segments.push(path);
-            next_seq = seq + 1;
+        }
+        if segments.is_empty() && !damaged.is_empty() {
+            return Err(damaged_error());
         }
         Ok(Self {
             dir: dir.to_path_buf(),
@@ -169,8 +174,28 @@ impl Manifest {
             vault_id: vault_id.to_vec(),
             next_seq,
             segments,
+            damaged,
             entries,
         })
+    }
+
+    /// Writes a fresh snapshot (so skipped segments no longer matter) and
+    /// moves the damaged segments into `aside`. Returns how many moved.
+    pub fn set_aside_damaged(&mut self, aside: &Path) -> CoreResult<usize> {
+        if self.damaged.is_empty() {
+            return Ok(0);
+        }
+        self.compact()?;
+        fs::create_dir_all(aside)?;
+        let mut moved = 0;
+        for p in std::mem::take(&mut self.damaged) {
+            if let Some(name) = p.file_name() {
+                if fs::rename(&p, aside.join(name)).is_ok() {
+                    moved += 1;
+                }
+            }
+        }
+        Ok(moved)
     }
 
     /// Appends one batch durably, then applies it in memory.
@@ -300,7 +325,17 @@ fn apply(entries: &mut BTreeMap<Id, Entry>, records: Vec<Record>) {
     }
 }
 
-fn damaged() -> CoreError {
+fn open_segment(key: &AeadKey, vault_id: &[u8], seq: u64, path: &Path) -> Option<Segment> {
+    let bytes = fs::read(path).ok()?;
+    if bytes.len() < 12 {
+        return None;
+    }
+    let nonce: [u8; 12] = bytes[..12].try_into().ok()?;
+    let plain = key.open(&nonce, &aad(vault_id, seq), &bytes[12..]).ok()?;
+    serde_json::from_slice(&plain).ok()
+}
+
+fn damaged_error() -> CoreError {
     CoreError::InvalidInput {
         message: "the vault's file list is damaged or was changed outside Atropos".into(),
     }
