@@ -44,6 +44,14 @@ validated module.
   Symphonia decodes, cpal plays, nothing goes through another app); GIFs and
   animated WebP play; text can be selected, copied (the clipboard is cleared
   after 60 seconds or on lock) and edited in place. Android 8.0 or newer.
+- v0.7: a normal file app inside the vault. Sort by name, date, type or size;
+  search a vault by name; next and previous file; "Open as" for any file
+  (kept in the encrypted file list); find in text, Markdown and PDFs; PDFs
+  zoom in place; photo details; picture edits (rotate, flip, crop, resize)
+  with save or save as copy; text in packages can be edited (the package is
+  rewritten and swapped in safely); recent packages on the home screen; and
+  an update check you can set to never, every start, daily or weekly, with
+  the release notes shown once per version.
 
 ## Building
 

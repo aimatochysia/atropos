@@ -6,11 +6,14 @@ import '../core/biometrics.dart';
 import '../core/cards.dart';
 import '../core/platform_files.dart';
 import '../core/secure_clipboard.dart';
+import '../core/settings_ext.dart';
 import '../src/rust/api/package.dart';
 import '../src/rust/api/settings.dart' as rs;
 import '../src/rust/api/vault.dart';
 
-export '../src/rust/api/settings.dart' show AppSettings, KnownVault;
+export '../core/settings_ext.dart';
+export '../src/rust/api/settings.dart'
+    show AppSettings, KnownPackage, KnownVault, UpdateCheck;
 
 /// Where settings and the list of known vaults are kept. The real one is the
 /// Rust core; tests use a fake.
@@ -23,6 +26,14 @@ abstract interface class SettingsStore {
 
   /// This installation's random id (names its biometric key slots).
   Future<String> deviceId();
+
+  Future<void> setVaultSort(String path, SortOrder sort);
+
+  /// Packages opened recently (newest first).
+  Future<List<rs.KnownPackage>> packages();
+  Future<void> rememberPackage(String path);
+  Future<void> forgetPackage(String path);
+  Future<void> forgetAllPackages();
 }
 
 class RustSettingsStore implements SettingsStore {
@@ -49,6 +60,26 @@ class RustSettingsStore implements SettingsStore {
 
   @override
   Future<String> deviceId() => rs.deviceId(configDir: configDir);
+
+  @override
+  Future<void> setVaultSort(String path, SortOrder sort) =>
+      rs.setVaultSort(configDir: configDir, path: path, sort: sort);
+
+  @override
+  Future<List<rs.KnownPackage>> packages() =>
+      rs.listPackages(configDir: configDir);
+
+  @override
+  Future<void> rememberPackage(String path) =>
+      rs.rememberPackage(configDir: configDir, path: path);
+
+  @override
+  Future<void> forgetPackage(String path) =>
+      rs.forgetPackage(configDir: configDir, path: path);
+
+  @override
+  Future<void> forgetAllPackages() =>
+      rs.forgetAllPackages(configDir: configDir);
 }
 
 /// Auto-lock choices offered in settings, in minutes (0 = when the app
@@ -78,12 +109,9 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   /// Null until [load] or when it could not be made.
   String? deviceId;
 
-  rs.AppSettings settings = const rs.AppSettings(
-    autoLockMinutes: 0,
-    secureKeyboard: true,
-    checkUpdates: true,
-  );
+  rs.AppSettings settings = defaultSettings;
   List<rs.KnownVault> vaults = const [];
+  List<rs.KnownPackage> packages = const [];
   bool loaded = false;
 
   final Map<String, VaultSession> _open = {};
@@ -114,6 +142,11 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     } catch (_) {
       vaults = const [];
     }
+    try {
+      packages = settings.rememberPackages ? await store.packages() : const [];
+    } catch (_) {
+      packages = const [];
+    }
     notifyListeners();
   }
 
@@ -121,6 +154,57 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     settings = next;
     notifyListeners();
     await store.save(next);
+  }
+
+  /// How the vault at [path] sorts its files (by name until changed).
+  SortOrder sortFor(String path) {
+    for (final v in vaults) {
+      if (v.path == path) return v.sort;
+    }
+    return defaultSettings.packageSort;
+  }
+
+  Future<void> setSort(String path, SortOrder sort) async {
+    vaults = [
+      for (final v in vaults)
+        v.path == path
+            ? rs.KnownVault(
+                path: v.path,
+                name: v.name,
+                lastOpened: v.lastOpened,
+                sort: sort,
+              )
+            : v,
+    ];
+    notifyListeners();
+    try {
+      await store.setVaultSort(path, sort);
+    } catch (_) {
+      // Sorting still works for now; it just isn't remembered.
+    }
+  }
+
+  /// Lists a package on Home for next time (only its file name is shown).
+  Future<void> packageUsed(String path) async {
+    if (!settings.rememberPackages) return;
+    try {
+      await store.rememberPackage(path);
+    } catch (_) {
+      return;
+    }
+    await refreshVaults();
+  }
+
+  Future<void> forgetPackage(String path) async {
+    await store.forgetPackage(path);
+    await refreshVaults();
+  }
+
+  /// Turns the recent packages list on or off; off also clears it.
+  Future<void> setRememberPackages(bool on) async {
+    await updateSettings(settings.copyWith(rememberPackages: on));
+    if (!on) await store.forgetAllPackages();
+    await refreshVaults();
   }
 
   VaultSession? session(String path) => _open[path];

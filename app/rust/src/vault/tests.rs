@@ -580,3 +580,23 @@ fn edited_contents_replace_the_old_blob() {
     let folder = v.create_folder(None, "dir").unwrap();
     assert!(v.replace_contents(folder, b"x").is_err());
 }
+
+#[test]
+fn open_as_choice_is_kept_in_the_file_list() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vpath = tmp.path().join("v");
+    let (mut v, _) = Vault::create(&vpath, PW, fast()).unwrap();
+    let src = tmp.path().join("key.pub");
+    fs::write(&src, b"ssh-ed25519 AAAA").unwrap();
+    v.import(&[src], None, false, &mut |_| {}).unwrap();
+    let id = v.manifest().children(None)[0].id;
+    v.set_open_as(id, Some("markdown".into())).unwrap();
+    // Survives an edit and a fresh unlock.
+    v.replace_contents(id, b"ssh-ed25519 BBBB").unwrap();
+    drop(v);
+    let v = Vault::unlock(&vpath, &Unlock::Password(PW)).unwrap();
+    assert_eq!(
+        v.manifest().get(&id).unwrap().open_as.as_deref(),
+        Some("markdown")
+    );
+}

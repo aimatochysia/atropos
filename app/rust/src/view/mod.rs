@@ -13,7 +13,9 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::error::{CoreError, CoreResult};
 
 pub mod audio;
+pub mod edit;
 pub mod markdown;
+mod pdftext;
 #[cfg(test)]
 mod tests;
 
@@ -34,7 +36,32 @@ pub enum Preview {
     None,
 }
 
-fn extension(name: &str) -> String {
+impl Preview {
+    /// The name stored in the file list for "Open as".
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Preview::Image => "image",
+            Preview::Pdf => "pdf",
+            Preview::Text => "text",
+            Preview::Markdown => "markdown",
+            Preview::Audio => "audio",
+            Preview::None => "none",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Preview> {
+        Some(match s {
+            "image" => Preview::Image,
+            "pdf" => Preview::Pdf,
+            "text" => Preview::Text,
+            "markdown" => Preview::Markdown,
+            "audio" => Preview::Audio,
+            _ => return None,
+        })
+    }
+}
+
+pub fn extension(name: &str) -> String {
     match name.rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() => ext.to_ascii_lowercase(),
         _ => String::new(),
@@ -307,6 +334,82 @@ pub struct Decoded {
     /// it shows. `delays[0]` belongs to `image`.
     frames: Vec<RgbaImage>,
     delays: Vec<u32>,
+    /// Camera details read from the photo's EXIF block, if any.
+    details: Vec<PhotoDetail>,
+}
+
+/// One line of a photo's details, such as "Camera: Pixel 8".
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhotoDetail {
+    pub label: String,
+    pub value: String,
+}
+
+/// Reads the camera details people usually want from a photo's EXIF.
+fn photo_details(data: &[u8]) -> Vec<PhotoDetail> {
+    use exif::{In, Tag};
+    let Ok(ex) = exif::Reader::new().read_from_container(&mut Cursor::new(data)) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let text = |tag: Tag| {
+        ex.get_field(tag, In::PRIMARY).map(|f| {
+            f.display_value()
+                .with_unit(&ex)
+                .to_string()
+                .trim_matches('"')
+                .trim()
+                .to_string()
+        })
+    };
+    let mut push = |label: &str, value: Option<String>| {
+        if let Some(v) = value.filter(|v| !v.is_empty()) {
+            out.push(PhotoDetail {
+                label: label.into(),
+                value: v,
+            });
+        }
+    };
+    let camera = match (text(Tag::Make), text(Tag::Model)) {
+        (Some(make), Some(model)) if model.starts_with(&make) => Some(model),
+        (Some(make), Some(model)) => Some(format!("{make} {model}")),
+        (a, b) => a.or(b),
+    };
+    push("Camera", camera);
+    push("Lens", text(Tag::LensModel));
+    push(
+        "Taken",
+        text(Tag::DateTimeOriginal).or_else(|| text(Tag::DateTime)),
+    );
+    push("Exposure", text(Tag::ExposureTime));
+    push("Aperture", text(Tag::FNumber));
+    push("ISO", text(Tag::PhotographicSensitivity));
+    push("Focal length", text(Tag::FocalLength));
+    push("Flash", text(Tag::Flash));
+    let coord = |tag: Tag, rtag: Tag| -> Option<f64> {
+        let f = ex.get_field(tag, In::PRIMARY)?;
+        let exif::Value::Rational(ref v) = f.value else {
+            return None;
+        };
+        if v.len() < 3 {
+            return None;
+        }
+        let deg = v[0].to_f64() + v[1].to_f64() / 60.0 + v[2].to_f64() / 3600.0;
+        let r = text(rtag).unwrap_or_default();
+        Some(if r.starts_with('S') || r.starts_with('W') {
+            -deg
+        } else {
+            deg
+        })
+    };
+    if let (Some(lat), Some(lon)) = (
+        coord(Tag::GPSLatitude, Tag::GPSLatitudeRef),
+        coord(Tag::GPSLongitude, Tag::GPSLongitudeRef),
+    ) {
+        push("Location", Some(format!("{lat:.5}, {lon:.5}")));
+    }
+    push("Software", text(Tag::Software));
+    out
 }
 
 impl Drop for Decoded {
@@ -371,6 +474,19 @@ fn decode_animation(data: &[u8]) -> Option<(Vec<RgbaImage>, Vec<u32>)> {
 }
 
 impl Decoded {
+    /// The first (or only) frame at full size.
+    pub fn image(&self) -> &RgbaImage {
+        &self.image
+    }
+
+    pub fn animated(&self) -> bool {
+        !self.frames.is_empty()
+    }
+
+    pub fn details(&self) -> &[PhotoDetail] {
+        &self.details
+    }
+
     pub fn delays(&self) -> &[u32] {
         &self.delays
     }
@@ -417,6 +533,7 @@ pub fn decode_image(data: &[u8]) -> CoreResult<Decoded> {
             image: first,
             frames,
             delays,
+            details: Vec::new(),
         });
     }
     let mut decoder = reader.into_decoder().map_err(|_| view_error("picture"))?;
@@ -437,6 +554,7 @@ pub fn decode_image(data: &[u8]) -> CoreResult<Decoded> {
         image: rgba,
         frames: Vec::new(),
         delays: vec![0],
+        details: photo_details(data),
     })
 }
 
@@ -477,6 +595,11 @@ impl Decoded {
     }
 }
 
+/// Scales an edited picture to fit the viewer.
+pub fn scale_picture(img: &RgbaImage, max_w: u32, max_h: u32) -> Picture {
+    scale(img, max_w, max_h)
+}
+
 fn scale(img: &RgbaImage, max_w: u32, max_h: u32) -> Picture {
     let (w, h) = fit(img.width(), img.height(), max_w, max_h);
     let rgba = if (w, h) == (img.width(), img.height()) {
@@ -502,6 +625,17 @@ impl AsRef<[u8]> for Wiped {
 
 pub struct PdfDoc {
     pdf: Pdf,
+    /// Each page's text, pulled out on the first search.
+    text: std::sync::Mutex<Vec<Option<Zeroizing<String>>>>,
+}
+
+/// One page where a search matched.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PdfHit {
+    pub page: u32,
+    pub count: u32,
+    /// Text around the first match on the page.
+    pub snippet: String,
 }
 
 impl PdfDoc {
@@ -517,7 +651,55 @@ impl PdfDoc {
         if pdf.pages().is_empty() {
             return Err(view_error("PDF"));
         }
-        Ok(PdfDoc { pdf })
+        let n = pdf.pages().len();
+        Ok(PdfDoc {
+            pdf,
+            text: std::sync::Mutex::new(vec![None; n]),
+        })
+    }
+
+    /// The text of page `index`, for find (and tests).
+    pub fn page_text(&self, index: usize) -> String {
+        let mut cache = self.text.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(Some(t)) = cache.get(index) {
+            return t.to_string();
+        }
+        let pages = self.pdf.pages();
+        let t = pages.get(index).map(pdftext::page_text).unwrap_or_default();
+        if let Some(slot) = cache.get_mut(index) {
+            *slot = Some(Zeroizing::new(t.clone()));
+        }
+        t
+    }
+
+    /// Pages containing `query`, with the number of matches on each.
+    pub fn search(&self, query: &str, match_case: bool) -> Vec<PdfHit> {
+        let q = if match_case {
+            query.to_string()
+        } else {
+            query.to_lowercase()
+        };
+        if q.trim().is_empty() {
+            return Vec::new();
+        }
+        let mut hits = Vec::new();
+        for i in 0..self.pdf.pages().len() {
+            let text = Zeroizing::new(self.page_text(i));
+            let hay = if match_case {
+                text.to_string()
+            } else {
+                text.to_lowercase()
+            };
+            let found: Vec<usize> = hay.match_indices(&q).map(|(at, _)| at).collect();
+            if let Some(&first) = found.first() {
+                hits.push(PdfHit {
+                    page: i as u32,
+                    count: found.len() as u32,
+                    snippet: snippet(&hay, &text, first, q.len()),
+                });
+            }
+        }
+        hits
     }
 
     /// Page sizes in PDF points (1/72 inch), already rotated.
@@ -564,6 +746,27 @@ impl PdfDoc {
     }
 }
 
+/// About 30 characters either side of a match, on one line. `hay` may be
+/// a lowercased copy of `text`; positions are mapped back by character.
+fn snippet(hay: &str, text: &str, at: usize, len: usize) -> String {
+    let start_ch = hay[..at].chars().count();
+    let len_ch = hay[at..at + len].chars().count();
+    let chars: Vec<char> = text.chars().collect();
+    let from = start_ch.saturating_sub(30);
+    let to = (start_ch + len_ch + 30).min(chars.len());
+    let mut s: String = chars[from.min(chars.len())..to]
+        .iter()
+        .map(|c| if c.is_whitespace() { ' ' } else { *c })
+        .collect();
+    if from > 0 {
+        s.insert(0, '…');
+    }
+    if to < chars.len() {
+        s.push('…');
+    }
+    s
+}
+
 /// What an open viewer holds. Every variant wipes its plaintext on drop.
 pub enum Content {
     Image(Decoded),
@@ -580,8 +783,18 @@ pub enum Content {
 impl Content {
     /// Builds the viewer content for a file's plaintext; `data` is wiped
     /// unless a PDF keeps it.
-    pub fn open(name: &str, data: Zeroizing<Vec<u8>>) -> CoreResult<(Preview, Content)> {
-        match sniff(name, &data) {
+    /// `force` overrides what the bytes look like (the person chose
+    /// "Open as").
+    pub fn open_as(
+        name: &str,
+        data: Zeroizing<Vec<u8>>,
+        force: Option<Preview>,
+    ) -> CoreResult<(Preview, Content)> {
+        let kind = match force {
+            Some(Preview::None) | None => sniff(name, &data),
+            Some(k) => k,
+        };
+        match kind {
             Preview::Image => Ok((Preview::Image, Content::Image(decode_image(&data)?))),
             Preview::Pdf => Ok((Preview::Pdf, Content::Pdf(PdfDoc::open(data)?))),
             Preview::Audio => Ok((
@@ -602,8 +815,8 @@ impl Content {
                 ))
             }
             Preview::None => Err(CoreError::InvalidInput {
-                message: "Atropos cannot show this kind of file. You can export it to open it \
-                          in another app."
+                message: "Atropos does not recognise this kind of file. Use \"Open as\" in the \
+                          file's menu to read it as text, a picture or another type."
                     .into(),
             }),
         }

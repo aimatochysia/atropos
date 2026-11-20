@@ -4,6 +4,7 @@ import '../core/crypto_service.dart';
 import '../state/app_controller.dart';
 import 'selftest_page.dart';
 import 'update_ui.dart';
+import 'widgets/feedback.dart';
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key, required this.crypto, this.appVersion = ''});
@@ -44,13 +45,7 @@ class SettingsPage extends StatelessWidget {
                 ),
               );
               if (m != null) {
-                await app.updateSettings(
-                  AppSettings(
-                    autoLockMinutes: m,
-                    secureKeyboard: s.secureKeyboard,
-                    checkUpdates: s.checkUpdates,
-                  ),
-                );
+                await app.updateSettings(s.copyWith(autoLockMinutes: m));
               }
             },
           ),
@@ -64,13 +59,7 @@ class SettingsPage extends StatelessWidget {
               'apps never see them.',
             ),
             value: s.secureKeyboard,
-            onChanged: (v) => app.updateSettings(
-              AppSettings(
-                autoLockMinutes: s.autoLockMinutes,
-                secureKeyboard: v,
-                checkUpdates: s.checkUpdates,
-              ),
-            ),
+            onChanged: (v) => app.updateSettings(s.copyWith(secureKeyboard: v)),
           ),
           ListTile(
             leading: const Icon(Icons.fact_check_outlined),
@@ -84,21 +73,89 @@ class SettingsPage extends StatelessWidget {
           ),
           const _Header('Updates'),
           const UpdateTile(),
-          SwitchListTile(
-            secondary: const Icon(Icons.update),
-            title: const Text('Check for updates when Atropos starts'),
-            subtitle: const Text(
-              'Asks GitHub for the latest release. Nothing about your vaults '
-              'is sent.',
+          ListTile(
+            key: const Key('update-frequency'),
+            leading: const Icon(Icons.update),
+            title: const Text('Look for updates'),
+            subtitle: Text(
+              '${updateCheckLabel(s.updateCheck)}. Asks GitHub for the '
+              'latest release; nothing about your vaults is sent.',
             ),
-            value: s.checkUpdates,
-            onChanged: (v) => app.updateSettings(
-              AppSettings(
-                autoLockMinutes: s.autoLockMinutes,
-                secureKeyboard: s.secureKeyboard,
-                checkUpdates: v,
+            onTap: () async {
+              final c = await showDialog<UpdateCheck>(
+                context: context,
+                builder: (ctx) => SimpleDialog(
+                  title: const Text('Look for updates'),
+                  children: [
+                    for (final c in UpdateCheck.values)
+                      RadioListTile<UpdateCheck>(
+                        key: Key('update-${c.name}'),
+                        value: c,
+                        // ignore: deprecated_member_use
+                        groupValue: s.updateCheck,
+                        title: Text(updateCheckLabel(c)),
+                        // ignore: deprecated_member_use
+                        onChanged: (v) => Navigator.pop(ctx, v),
+                      ),
+                  ],
+                ),
+              );
+              if (c != null) {
+                await app.updateSettings(s.copyWith(updateCheck: c));
+              }
+            },
+          ),
+          if (s.skippedVersion.isNotEmpty)
+            ListTile(
+              leading: const Icon(Icons.skip_next_outlined),
+              title: Text('Skipping version ${s.skippedVersion}'),
+              subtitle: const Text('You are not reminded about it.'),
+              trailing: TextButton(
+                onPressed: () =>
+                    app.updateSettings(s.copyWith(skippedVersion: '')),
+                child: const Text('Undo'),
               ),
             ),
+          const _Header('Packages and files'),
+          SwitchListTile(
+            key: const Key('remember-packages'),
+            secondary: const Icon(Icons.history),
+            title: const Text('Remember packages I open'),
+            subtitle: const Text(
+              'Lists them on the home screen by file name. They still need '
+              'their passphrase or vault each time. Turning this off clears '
+              'the list.',
+            ),
+            value: s.rememberPackages,
+            onChanged: app.setRememberPackages,
+          ),
+          ListTile(
+            key: const Key('open-as-rules'),
+            leading: const Icon(Icons.file_open_outlined),
+            title: const Text('File types opened another way'),
+            subtitle: Text(
+              s.openAsRules.isEmpty
+                  ? 'None. Use "Open as" on a file in a package to choose.'
+                  : s.openAsRules
+                        .map((r) => '.${r.extension_} as ${r.kind.name}')
+                        .join(', '),
+            ),
+            onTap: s.openAsRules.isEmpty
+                ? null
+                : () async {
+                    final ok = await confirm(
+                      context,
+                      title: 'Forget these choices?',
+                      message:
+                          'Files in packages open by their type again. '
+                          'Choices made for files inside a vault are kept '
+                          'in that vault.',
+                      action: 'Forget',
+                    );
+                    if (ok) {
+                      await app.updateSettings(s.copyWith(openAsRules: []));
+                    }
+                  },
           ),
           const _Header('About'),
           ListTile(

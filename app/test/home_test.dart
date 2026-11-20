@@ -1,6 +1,7 @@
 import 'package:atropos/app.dart';
 import 'package:atropos/core/crypto_service.dart';
 import 'package:atropos/state/app_controller.dart';
+import 'package:atropos/src/rust/api/vault.dart' show SortOrder;
 import 'package:atropos/ui/selftest_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -27,11 +28,7 @@ class FakeCrypto implements CryptoService {
 }
 
 class FakeStore implements SettingsStore {
-  AppSettings settings = const AppSettings(
-    autoLockMinutes: 0,
-    secureKeyboard: true,
-    checkUpdates: true,
-  );
+  AppSettings settings = defaultSettings;
   final known = <KnownVault>[];
 
   @override
@@ -52,6 +49,30 @@ class FakeStore implements SettingsStore {
 
   @override
   Future<String> deviceId() async => '00112233445566778899aabbccddeeff';
+
+  final recent = <String>[];
+
+  @override
+  Future<void> setVaultSort(String path, SortOrder sort) async {}
+
+  @override
+  Future<List<KnownPackage>> packages() async => [
+    for (final p in recent)
+      KnownPackage(
+        path: p,
+        name: p.split('/').last.replaceAll('.atropos', ''),
+        lastOpened: 1,
+      ),
+  ];
+
+  @override
+  Future<void> rememberPackage(String path) async => recent.insert(0, path);
+
+  @override
+  Future<void> forgetPackage(String path) async => recent.remove(path);
+
+  @override
+  Future<void> forgetAllPackages() async => recent.clear();
 }
 
 void main() {

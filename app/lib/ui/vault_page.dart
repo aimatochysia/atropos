@@ -10,6 +10,7 @@ import '../src/rust/api/viewer.dart';
 import '../state/app_controller.dart';
 import 'card_flows.dart';
 import 'check_page.dart';
+import 'file_menu.dart';
 import 'package_browser_page.dart';
 import 'package_flows.dart';
 import 'recovery_page.dart';
@@ -64,7 +65,10 @@ class _VaultPageState extends State<VaultPage> {
 
   Future<void> _reload() async {
     try {
-      final list = await _s.list(parent: _parent);
+      final list = await _s.list(
+        parent: _parent,
+        sort: AppScope.read(context).sortFor(_s.path),
+      );
       if (!mounted) return;
       setState(() {
         _entries = list;
@@ -90,23 +94,74 @@ class _VaultPageState extends State<VaultPage> {
       });
       _reload();
     } else if (e.kind == EntryKind.file &&
-        previewForName(name: e.name) != PreviewKind.none) {
+        effectiveKind(e) != PreviewKind.none) {
       _view(e);
     } else {
       _details(e);
     }
   }
 
-  void _view(EntryInfo e) {
+  void _view(EntryInfo e, {List<EntryInfo>? among}) {
+    final files = (among ?? _entries)
+        .where((x) => x.kind == EntryKind.file)
+        .toList();
+    final i = files.indexWhere((x) => x.id == e.id);
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => ViewerPage.vault(
-          session: _s,
-          entry: e,
-          onExport: () => _export([e]),
+        builder: (_) => ViewerPage(
+          entries: i < 0 ? [e] : files,
+          index: i < 0 ? 0 : i,
+          source: vaultSource(_s, export: (x) => _export([x])),
+          onChanged: _reload,
         ),
       ),
     );
+  }
+
+  Future<void> _openAs(EntryInfo e) async {
+    final k = await pickOpenAs(
+      context,
+      name: e.name,
+      current: e.openAs,
+      note: 'Remembered for this file inside the vault.',
+    );
+    if (k == null || !mounted) return;
+    final kind = k == PreviewKind.none ? null : k;
+    await guarded(context, () => _s.setOpenAs(id: e.id, openAs: kind));
+    await _reload();
+    if (!mounted) return;
+    final fresh = _entries.where((x) => x.id == e.id).firstOrNull ?? e;
+    if (effectiveKind(fresh) != PreviewKind.none) _view(fresh);
+  }
+
+  Future<void> _sort(SortOrder s) async {
+    await AppScope.read(context).setSort(_s.path, s);
+    await _reload();
+  }
+
+  Future<void> _search() async {
+    final hit = await Navigator.of(context).push<SearchHit>(
+      MaterialPageRoute(builder: (_) => VaultSearchPage(session: _s)),
+    );
+    if (hit == null || !mounted) return;
+    setState(() {
+      _crumbs
+        ..clear()
+        ..addAll(hit.folders.map((f) => _Crumb(f.id, f.name)));
+      _selected.clear();
+      _loading = true;
+    });
+    await _reload();
+    if (!mounted) return;
+    final e = hit.entry;
+    if (e.kind == EntryKind.folder) {
+      _open(e);
+    } else if (e.kind == EntryKind.file &&
+        effectiveKind(e) != PreviewKind.none) {
+      _view(e);
+    } else {
+      _details(e);
+    }
   }
 
   void _goTo(int depth) {
@@ -410,56 +465,87 @@ class _VaultPageState extends State<VaultPage> {
         }
 
         return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: _iconFor(e, Theme.of(ctx).colorScheme),
-                title: Text(e.name),
-                subtitle: Text(_subtitle(e)),
-              ),
-              const Divider(height: 1),
-              if (e.kind == EntryKind.file)
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
                 ListTile(
-                  key: const Key('item-view'),
-                  leading: const Icon(Icons.visibility_outlined),
-                  title: const Text('View'),
-                  subtitle: Text(describeFileType(name: e.name)),
+                  leading: _iconFor(e, Theme.of(ctx).colorScheme),
+                  title: Text(e.name),
+                  subtitle: Text(_subtitle(e)),
+                ),
+                const Divider(height: 1),
+                if (e.kind == EntryKind.file) ...[
+                  ListTile(
+                    key: const Key('item-view'),
+                    leading: const Icon(Icons.visibility_outlined),
+                    title: const Text('View'),
+                    subtitle: Text(describeFileType(name: e.name)),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _view(e);
+                    },
+                  ),
+                  ListTile(
+                    key: const Key('item-open-as'),
+                    leading: const Icon(Icons.file_open_outlined),
+                    title: const Text('Open as…'),
+                    subtitle: Text(previewLabel(effectiveKind(e))),
+                    onTap: () => run(() => _openAs(e)),
+                  ),
+                ],
+                ListTile(
+                  key: const Key('item-select'),
+                  leading: const Icon(Icons.check_box_outlined),
+                  title: const Text('Select'),
                   onTap: () {
                     Navigator.pop(ctx);
-                    _view(e);
+                    _toggle(e);
                   },
                 ),
-              ListTile(
-                key: const Key('item-export'),
-                leading: const Icon(Icons.file_download_outlined),
-                title: const Text('Export unencrypted…'),
-                onTap: () => run(() => _export([e])),
-              ),
-              ListTile(
-                leading: const Icon(Icons.inventory_2_outlined),
-                title: const Text('Seal into a package…'),
-                onTap: () => run(() => _seal([e])),
-              ),
-              ListTile(
-                leading: const Icon(Icons.drive_file_rename_outline),
-                title: const Text('Rename'),
-                onTap: () => run(() => _rename(e)),
-              ),
-              ListTile(
-                leading: const Icon(Icons.drive_file_move_outlined),
-                title: const Text('Move'),
-                onTap: () => run(() => _move([e])),
-              ),
-              ListTile(
-                leading: Icon(
-                  Icons.delete_outline,
-                  color: Theme.of(ctx).colorScheme.error,
+                ListTile(
+                  key: const Key('item-export'),
+                  leading: const Icon(Icons.file_download_outlined),
+                  title: const Text('Export unencrypted…'),
+                  onTap: () => run(() => _export([e])),
                 ),
-                title: const Text('Delete'),
-                onTap: () => run(() => _delete([e])),
-              ),
-            ],
+                ListTile(
+                  leading: const Icon(Icons.inventory_2_outlined),
+                  title: const Text('Seal into a package…'),
+                  onTap: () => run(() => _seal([e])),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.drive_file_rename_outline),
+                  title: const Text('Rename'),
+                  onTap: () => run(() => _rename(e)),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.drive_file_move_outlined),
+                  title: const Text('Move'),
+                  onTap: () => run(() => _move([e])),
+                ),
+                ListTile(
+                  leading: Icon(
+                    Icons.delete_outline,
+                    color: Theme.of(ctx).colorScheme.error,
+                  ),
+                  title: const Text('Delete'),
+                  onTap: () => run(() => _delete([e])),
+                ),
+                ListTile(
+                  key: const Key('item-details'),
+                  leading: const Icon(Icons.info_outline),
+                  title: const Text('Details'),
+                  onTap: () => run(
+                    () => showEntryDetails(
+                      context,
+                      e,
+                      location: _crumbs.map((c) => c.name).join(' / '),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -649,7 +735,7 @@ class _VaultPageState extends State<VaultPage> {
       Icon(switch (e.kind) {
         EntryKind.folder => Icons.folder,
         EntryKind.link => Icons.link,
-        EntryKind.file => previewIcon(previewForName(name: e.name)),
+        EntryKind.file => previewIcon(effectiveKind(e)),
       }, color: e.kind == EntryKind.folder ? scheme.primary : null);
 
   static String _subtitle(EntryInfo e) {
@@ -719,6 +805,16 @@ class _VaultPageState extends State<VaultPage> {
                   ),
                 ]
               : [
+                  IconButton(
+                    key: const Key('vault-search'),
+                    tooltip: 'Search this vault',
+                    icon: const Icon(Icons.search),
+                    onPressed: _search,
+                  ),
+                  SortButton(
+                    sort: AppScope.of(context).sortFor(_s.path),
+                    onChanged: _sort,
+                  ),
                   IconButton(
                     key: const Key('lock-vault'),
                     tooltip: 'Lock',
@@ -826,32 +922,39 @@ class _VaultPageState extends State<VaultPage> {
                         itemBuilder: (_, i) {
                           final e = _entries[i];
                           final on = _selected.contains(e.id);
-                          return ListTile(
-                            key: Key('entry-${e.name}'),
-                            selected: on,
-                            selectedTileColor: scheme.secondaryContainer
-                                .withValues(alpha: 0.5),
-                            leading: selecting
-                                ? Checkbox(
-                                    value: on,
-                                    onChanged: (_) => _toggle(e),
-                                  )
-                                : _iconFor(e, scheme),
-                            title: Text(
-                              e.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            subtitle: Text(_subtitle(e)),
-                            onTap: () => _open(e),
-                            onLongPress: () => _toggle(e),
-                            trailing: selecting
+                          return GestureDetector(
+                            onSecondaryTap: selecting
                                 ? null
-                                : IconButton(
-                                    tooltip: 'More',
-                                    icon: const Icon(Icons.more_vert),
-                                    onPressed: () => _details(e),
-                                  ),
+                                : () => _details(e),
+                            child: ListTile(
+                              key: Key('entry-${e.name}'),
+                              selected: on,
+                              selectedTileColor: scheme.secondaryContainer
+                                  .withValues(alpha: 0.5),
+                              leading: selecting
+                                  ? Checkbox(
+                                      value: on,
+                                      onChanged: (_) => _toggle(e),
+                                    )
+                                  : _iconFor(e, scheme),
+                              title: Text(
+                                e.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              subtitle: Text(_subtitle(e)),
+                              onTap: () => _open(e),
+                              onLongPress: () =>
+                                  selecting ? _toggle(e) : _details(e),
+                              trailing: selecting
+                                  ? null
+                                  : IconButton(
+                                      key: Key('more-${e.name}'),
+                                      tooltip: 'More',
+                                      icon: const Icon(Icons.more_vert),
+                                      onPressed: () => _details(e),
+                                    ),
+                            ),
                           );
                         },
                       ),
@@ -1019,6 +1122,103 @@ class _FolderChooserState extends State<_FolderChooser> {
           child: const Text('Move here'),
         ),
       ],
+    );
+  }
+}
+
+/// Finds files and folders anywhere in the vault by name. Returns the hit
+/// that was tapped.
+class VaultSearchPage extends StatefulWidget {
+  const VaultSearchPage({super.key, required this.session});
+  final VaultSession session;
+
+  @override
+  State<VaultSearchPage> createState() => _VaultSearchPageState();
+}
+
+class _VaultSearchPageState extends State<VaultSearchPage> {
+  List<SearchHit> _hits = const [];
+  String _query = '';
+  bool _busy = false;
+  int _ticket = 0;
+
+  Future<void> _search(String q) async {
+    _query = q;
+    final t = ++_ticket;
+    if (q.trim().isEmpty) {
+      setState(() => _hits = const []);
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final hits = await widget.session.search(query: q);
+      if (mounted && t == _ticket) setState(() => _hits = hits);
+    } catch (e) {
+      if (mounted) showMessage(context, e.toString(), error: true);
+    } finally {
+      if (mounted && t == _ticket) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(
+        title: TextField(
+          key: const Key('vault-search-field'),
+          autofocus: true,
+          autocorrect: false,
+          enableSuggestions: false,
+          enableIMEPersonalizedLearning: false,
+          decoration: InputDecoration(
+            hintText: 'Search ${widget.session.name} by name',
+            border: InputBorder.none,
+          ),
+          onChanged: _search,
+        ),
+        bottom: _busy
+            ? const PreferredSize(
+                preferredSize: Size.fromHeight(2),
+                child: LinearProgressIndicator(minHeight: 2),
+              )
+            : null,
+      ),
+      body: _query.trim().isEmpty
+          ? const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Text(
+                  'Type part of a file or folder name. The search runs on '
+                  'the encrypted list of names in memory; nothing is '
+                  'decrypted to disk.',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            )
+          : _hits.isEmpty && !_busy
+          ? const Center(child: Text('Nothing found.'))
+          : ListView.builder(
+              key: const Key('vault-search-results'),
+              itemCount: _hits.length,
+              itemBuilder: (context, i) {
+                final h = _hits[i];
+                final where = h.folders.isEmpty
+                    ? widget.session.name
+                    : h.folders.map((f) => f.name).join(' / ');
+                return ListTile(
+                  key: Key('hit-${h.entry.name}'),
+                  leading: _VaultPageState._iconFor(h.entry, scheme),
+                  title: Text(h.entry.name, overflow: TextOverflow.ellipsis),
+                  subtitle: Text(
+                    'In $where · ${_VaultPageState._subtitle(h.entry)}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  onTap: () => Navigator.pop(context, h),
+                );
+              },
+            ),
     );
   }
 }

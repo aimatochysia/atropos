@@ -18,10 +18,15 @@ import 'package:atropos/state/app_controller.dart';
 import 'package:atropos/ui/check_page.dart';
 import 'package:atropos/ui/package_browser_page.dart';
 import 'package:atropos/ui/selftest_page.dart';
+import 'package:atropos/ui/update_ui.dart';
 import 'package:atropos/ui/viewer_page.dart';
+import 'package:atropos/state/update_controller.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
+
+import '../test/fake_update.dart';
 
 class TempFiles extends PlatformFiles {
   const TempFiles(this.root);
@@ -85,14 +90,16 @@ Future<void> typeOnKeypad(WidgetTester tester, String text) async {
   }
 }
 
-/// A one-page PDF (200x100 points) with a red square on the left.
-List<int> tinyPdf() {
-  const content = '1 0 0 rg 0 0 100 100 re f';
+/// A one-page PDF (200x100 points) with a red square on the left, or
+/// with [content] drawn in Helvetica.
+List<int> tinyPdf({String content = '1 0 0 rg 0 0 100 100 re f'}) {
   final objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R '
+        '/Resources << /Font << /F1 5 0 R >> >> >>',
     '<< /Length ${content.length} >>\nstream\n$content\nendstream',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
   ];
   final out = StringBuffer('%PDF-1.4\n');
   final offsets = <int>[];
@@ -602,9 +609,35 @@ void main() {
     await tester.tap(find.byKey(const Key('package-item-plan.txt')));
     await pumpUntil(tester, find.byKey(const Key('viewer-text')));
     expect(find.text('meet at noon'), findsOneWidget);
-    // Read-only: no edit, no export.
-    expect(find.byKey(const Key('viewer-edit')), findsNothing);
-    expect(find.byKey(const Key('viewer-export')), findsNothing);
+
+    // Text in a package can be edited; saving rewrites the package.
+    await tester.tap(find.byKey(const Key('viewer-edit')));
+    await pumpUntil(tester, find.byKey(const Key('editor-field')));
+    await tester.enterText(
+      find.byKey(const Key('editor-field')),
+      'meet at one',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('editor-save')));
+    await pumpUntil(tester, find.text('Saved into the package.'));
+    await pumpUntil(tester, find.byKey(const Key('viewer-text')));
+    expect(find.text('meet at one'), findsOneWidget);
+    final docs = (await p.list(parent: top.single.id)).first;
+    final plan = (await p.list(parent: docs.id)).single;
+    final reread = await p.openViewer(id: plan.id);
+    expect(await reread.editableText(), 'meet at one');
+    reread.close();
+    // The other files are still there and readable.
+    final again = await p.openViewer(id: trip[1].id);
+    expect((await again.audioInfo()).durationMs, 2000);
+    again.close();
+
+    // One file can be extracted on its own.
+    final dest = Directory('${tmp.path}/out')..createSync();
+    final written = await p.extractFile(id: plan.id, destDir: dest.path);
+    expect(File(written).readAsStringSync(), 'meet at one');
+    final second = await p.extractFile(id: plan.id, destDir: dest.path);
+    expect(second, isNot(written));
 
     // Locking closes the package and everything opened from it.
     await controller.lockAll();
@@ -638,5 +671,309 @@ void main() {
     expect((await s.list()).single.size.toInt(), 21);
     again.close();
     await s.lock();
+  });
+
+  testWidgets('sorting, search, open as, next and previous, find', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(900, 1800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final src = Directory('${tmp.path}/src')..createSync();
+    File('${src.path}/b.txt').writeAsStringSync('beta beta Beta');
+    File('${src.path}/a.md').writeAsStringSync('# Alpha\n\nalpha text');
+    File('${src.path}/c.cfg').writeAsStringSync('key = value\n' * 50);
+    Directory('${src.path}/deep/er').createSync(recursive: true);
+    File('${src.path}/deep/er/needle.txt').writeAsStringSync('x');
+    final now = DateTime.now();
+    File('${src.path}/b.txt').setLastModifiedSync(now);
+    File('${src.path}/a.md')
+        .setLastModifiedSync(now.subtract(const Duration(days: 3)));
+    File('${src.path}/c.cfg')
+        .setLastModifiedSync(now.subtract(const Duration(days: 9)));
+    final created = await createVault(
+      parentDir: tmp.path,
+      name: 'Sorts',
+      password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+    );
+    final s = created.session;
+    await finish(
+      s.import_(
+        sources: [
+          for (final n in ['b.txt', 'a.md', 'c.cfg', 'deep']) '${src.path}/$n',
+        ],
+        deleteOriginals: false,
+      ),
+    );
+    Future<List<String>> names(SortBy by, {bool desc = false}) async => [
+      for (final e in await s.list(
+        sort: SortOrder(by: by, descending: desc),
+      ))
+        e.name,
+    ];
+    // Folders first, then the order asked for.
+    expect(await names(SortBy.name), ['deep', 'a.md', 'b.txt', 'c.cfg']);
+    expect(await names(SortBy.name, desc: true), [
+      'deep',
+      'c.cfg',
+      'b.txt',
+      'a.md',
+    ]);
+    expect(await names(SortBy.modified, desc: true), [
+      'deep',
+      'b.txt',
+      'a.md',
+      'c.cfg',
+    ]);
+    expect(await names(SortBy.size, desc: true), [
+      'deep',
+      'c.cfg',
+      'a.md',
+      'b.txt',
+    ]);
+    expect(await names(SortBy.type), ['deep', 'c.cfg', 'a.md', 'b.txt']);
+
+    final hits = await s.search(query: 'NEEDLE');
+    expect(hits.single.entry.name, 'needle.txt');
+    expect(hits.single.folders.map((f) => f.name), ['deep', 'er']);
+    expect(await s.search(query: 'zzz'), isEmpty);
+
+    // "Open as" is kept with the file.
+    final cfg = (await s.list()).firstWhere((e) => e.name == 'c.cfg');
+    await s.setOpenAs(id: cfg.id, openAs: PreviewKind.markdown);
+    final cfg2 = (await s.list()).firstWhere((e) => e.name == 'c.cfg');
+    expect(cfg2.openAs, PreviewKind.markdown);
+    final cv = await s.openViewer(id: cfg.id);
+    expect(cv.kind, PreviewKind.markdown);
+    cv.close();
+
+    final controller = AppController(
+      store: RustSettingsStore('${tmp.path}/config'),
+      files: TempFiles(tmp.path),
+    );
+    await controller.load();
+    await controller.opened(s);
+    await controller.setSort(
+      s.path,
+      const SortOrder(by: SortBy.size, descending: true),
+    );
+    final fresh = AppController(
+      store: RustSettingsStore('${tmp.path}/config'),
+      files: TempFiles(tmp.path),
+    );
+    await fresh.load();
+    expect(fresh.sortFor(s.path).by, SortBy.size);
+
+    final files = (await s.list()).where((e) => e.kind == EntryKind.file);
+    await tester.pumpWidget(
+      AppScope(
+        controller: controller,
+        child: MaterialApp(
+          home: ViewerPage(
+            entries: files.toList(),
+            index: 1,
+            source: vaultSource(s, export: (_) async {}),
+          ),
+        ),
+      ),
+    );
+    await pumpUntil(tester, find.byKey(const Key('viewer-text')));
+    expect(find.text('b.txt'), findsOneWidget);
+    expect(find.text('2 of 3'), findsOneWidget);
+
+    // Find with and without match case.
+    await tester.tap(find.byKey(const Key('viewer-find')));
+    await tester.pump();
+    await tester.enterText(find.byKey(const Key('find-field')), 'beta');
+    await pumpUntil(tester, find.text('1 of 3'));
+    await tester.tap(find.byKey(const Key('find-next')));
+    await pumpUntil(tester, find.text('2 of 3'));
+    await tester.tap(find.byKey(const Key('find-case')));
+    await pumpUntil(tester, find.text('1 of 2'));
+
+    // Arrow keys and buttons move through the folder.
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('viewer-next')));
+    await pumpUntil(tester, find.text('c.cfg'));
+    // Opened as Markdown, as chosen above.
+    await pumpUntil(tester, find.byKey(const Key('viewer-markdown')));
+    await tester.tap(find.byKey(const Key('viewer-next')));
+    await pumpUntil(tester, find.text('a.md'));
+    await pumpUntil(tester, find.byKey(const Key('viewer-markdown')));
+    await tester.tap(find.byKey(const Key('viewer-previous')));
+    await pumpUntil(tester, find.text('c.cfg'));
+    await tester.pumpWidget(const SizedBox());
+    await s.lock();
+  });
+
+  testWidgets('pictures are edited and saved, or saved as a copy', (
+    tester,
+  ) async {
+    final src = Directory('${tmp.path}/src')..createSync();
+    File('${src.path}/dot.png').writeAsBytesSync(base64.decode(tinyPng));
+    final created = await createVault(
+      parentDir: tmp.path,
+      name: 'Pics',
+      password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+    );
+    final s = created.session;
+    await finish(
+      s.import_(sources: ['${src.path}/dot.png'], deleteOriginals: false),
+    );
+    final e = (await s.list()).single;
+    final v = await s.openViewer(id: e.id);
+    expect(await v.photoDetails(), isEmpty);
+    final preview = await v.renderEdited(
+      edits: const [ImageEdit.resize(maxSide: 1), ImageEdit.rotateLeft()],
+      maxWidth: 100,
+      maxHeight: 100,
+    );
+    expect(preview.width, greaterThan(0));
+    await expectLater(
+      v.renderEdited(
+        edits: const [ImageEdit.crop(left: 0.8, top: 0, right: 0.2, bottom: 1)],
+        maxWidth: 10,
+        maxHeight: 10,
+      ),
+      throwsA(anything),
+    );
+    final copyId = await s.saveEditedImage(
+      viewer: v,
+      id: e.id,
+      edits: const [ImageEdit.flipHorizontal()],
+      asCopy: true,
+    );
+    expect(copyId, isNot(e.id));
+    expect((await s.list()).map((x) => x.name).toSet(), {
+      'dot.png',
+      'dot (edited).png',
+    });
+    final same = await s.saveEditedImage(
+      viewer: v,
+      id: e.id,
+      edits: const [ImageEdit.rotateRight()],
+      asCopy: false,
+    );
+    expect(same, e.id);
+    v.close();
+    final again = await s.openViewer(id: e.id);
+    expect(again.kind, PreviewKind.image);
+    again.close();
+    await s.lock();
+  });
+
+  testWidgets('find in a PDF lists the pages', (tester) async {
+    final src = Directory('${tmp.path}/src')..createSync();
+    File('${src.path}/memo.pdf').writeAsBytesSync(
+      tinyPdf(
+        content:
+            'BT /F1 12 Tf 10 70 Td (Quarterly plan) Tj 0 -20 Td '
+            '(Atropos keeps the plan safe) Tj ET',
+      ),
+    );
+    final created = await createVault(
+      parentDir: tmp.path,
+      name: 'Pdf',
+      password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+    );
+    final s = created.session;
+    await finish(
+      s.import_(sources: ['${src.path}/memo.pdf'], deleteOriginals: false),
+    );
+    final v = await s.openViewer(id: (await s.list()).single.id);
+    final hits = await v.pdfSearch(query: 'PLAN', matchCase: false);
+    expect(hits.single.page, 0);
+    expect(hits.single.count, 2);
+    expect(await v.pdfSearch(query: 'PLAN', matchCase: true), isEmpty);
+    v.close();
+    await s.lock();
+  });
+
+  testWidgets('recent packages are listed by name and can be forgotten', (
+    tester,
+  ) async {
+    final src = Directory('${tmp.path}/box')..createSync();
+    File('${src.path}/a.txt').writeAsStringSync('a');
+    final out = '${tmp.path}/box.atropos';
+    await finish(
+      sealFiles(
+        sources: [src.path],
+        outFile: out,
+        passphrase: SecretInput.fromText(text: 'violet harbor tundra 9'),
+      ),
+    );
+    final c = AppController(
+      store: RustSettingsStore('${tmp.path}/config'),
+      files: TempFiles(tmp.path),
+    );
+    await c.load();
+    await c.packageUsed(out);
+    expect(c.packages.single.name, 'box');
+    expect(c.packages.single.path, out);
+    await c.setRememberPackages(false);
+    expect(c.packages, isEmpty);
+    await c.packageUsed(out);
+    expect(c.packages, isEmpty);
+    await c.setRememberPackages(true);
+    await c.packageUsed(out);
+    await c.forgetPackage(out);
+    expect(c.packages, isEmpty);
+  });
+
+  testWidgets('a new release pops up once and can be skipped', (tester) async {
+    final c = AppController(
+      store: RustSettingsStore('${tmp.path}/config'),
+      files: TempFiles(tmp.path),
+    );
+    await c.load();
+    expect(c.settings.updateCheck, UpdateCheck.everyStart);
+    final svc = FakeUpdateService()..next = updateInfo(version: '9.0.0');
+    final updates = UpdateController(service: svc, currentVersion: '0.7.0');
+    await tester.pumpWidget(
+      AtroposApp(
+        crypto: const RustCryptoService(),
+        controller: c,
+        updates: updates,
+      ),
+    );
+    await tester.pump();
+    final check = startupUpdateCheck(
+      c,
+      updates,
+      () => appNavigator.currentContext,
+      delay: Duration.zero,
+    );
+    await pumpUntil(tester, find.byKey(const Key('update-dialog')));
+    expect(find.textContaining('shiny', findRichText: true), findsOneWidget);
+    await tester.tap(find.byKey(const Key('update-skip')));
+    await tester.pumpAndSettle();
+    await check;
+    expect(c.settings.skippedVersion, '9.0.0');
+    expect(c.settings.notesShownFor, '9.0.0');
+    expect(c.settings.lastUpdateCheck, greaterThan(0));
+    expect(find.byKey(const Key('update-banner')), findsNothing);
+
+    // Next start: skipped, so no popup.
+    await startupUpdateCheck(
+      c,
+      updates,
+      () => appNavigator.currentContext,
+      delay: Duration.zero,
+    );
+    await tester.pump();
+    expect(find.byKey(const Key('update-dialog')), findsNothing);
+
+    // Off means no check at all.
+    await c.updateSettings(c.settings.copyWith(updateCheck: UpdateCheck.off));
+    svc.next = updateInfo(version: '9.1.0');
+    await startupUpdateCheck(
+      c,
+      updates,
+      () => appNavigator.currentContext,
+      delay: Duration.zero,
+    );
+    expect(updates.available?.version, '9.0.0');
+    await tester.pumpWidget(const SizedBox());
   });
 }

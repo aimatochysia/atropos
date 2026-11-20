@@ -461,6 +461,7 @@ impl Vault {
             link_target: None,
             data: None,
             sha256: None,
+            open_as: None,
         };
         self.manifest.commit(vec![Record::Put { entry }])?;
         Ok(id)
@@ -619,6 +620,7 @@ impl Vault {
             link_target: None,
             data: None,
             sha256: None,
+            open_as: None,
         };
         p.current = raw_name;
         if meta.file_type().is_symlink() {
@@ -738,6 +740,42 @@ impl Vault {
             }
         }
         Ok(())
+    }
+
+    /// Adds a new file holding `data` next to `like` (same folder, a free
+    /// name based on `name`). Returns its id.
+    pub fn add_copy(&mut self, like: Id, name: &str, data: &[u8]) -> CoreResult<Id> {
+        let src = self.manifest.get(&like).cloned().ok_or_else(gone)?;
+        let name = clean_name(name)?;
+        let id = random_array::<16>()?;
+        let entry = Entry {
+            id,
+            parent: src.parent,
+            name: self.manifest.free_name(src.parent, &name, None),
+            kind: Kind::File,
+            size: 0,
+            modified: now(),
+            executable: false,
+            link_target: None,
+            data: None,
+            sha256: None,
+            open_as: src.open_as.clone(),
+        };
+        let mut pack = Pack::new();
+        self.add_file(entry, &mut &data[..], &mut pack)?;
+        self.flush_pack(&mut pack)?;
+        Ok(id)
+    }
+
+    /// Remembers how file `id` should open ("text", "image", ...), or
+    /// forgets it with None.
+    pub fn set_open_as(&mut self, id: Id, open_as: Option<String>) -> CoreResult<()> {
+        let mut entry = self.manifest.get(&id).cloned().ok_or_else(gone)?;
+        if entry.open_as == open_as {
+            return Ok(());
+        }
+        entry.open_as = open_as;
+        self.manifest.commit(vec![Record::Put { entry }])
     }
 
     pub(crate) fn put_entry(&mut self, entry: Entry) -> CoreResult<()> {
@@ -950,7 +988,7 @@ pub fn clean_name(name: &str) -> CoreResult<String> {
 }
 
 /// A file name in `dir` that does not exist yet.
-fn free_disk_name(dir: &Path, wanted: &str) -> PathBuf {
+pub(crate) fn free_disk_name(dir: &Path, wanted: &str) -> PathBuf {
     let safe: String = wanted
         .chars()
         .map(|c| {

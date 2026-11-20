@@ -13,16 +13,22 @@ fn png(w: u32, h: u32) -> Vec<u8> {
 
 /// A one-page PDF (200×100 points) with a red rectangle on the left half.
 fn pdf() -> Vec<u8> {
-    let content = b"1 0 0 rg 0 0 100 100 re f";
+    pdf_with(b"1 0 0 rg 0 0 100 100 re f")
+}
+
+fn pdf_with(content: &[u8]) -> Vec<u8> {
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R \
+         /Resources << /Font << /F1 5 0 R >> >> >>"
+            .to_string(),
         format!(
             "<< /Length {} >>\nstream\n{}\nendstream",
             content.len(),
             std::str::from_utf8(content).unwrap()
         ),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
     ];
     let mut out = b"%PDF-1.4\n".to_vec();
     let mut offsets = Vec::new();
@@ -185,7 +191,7 @@ fn viewer_through_a_vault_and_wiped_on_lock() {
         .unwrap();
     let s = crate::api::vault::strong_session(v, None);
     let id = |name: &str| {
-        s.list(None)
+        s.list(None, None)
             .unwrap()
             .into_iter()
             .find(|e| e.name == name)
@@ -289,7 +295,7 @@ fn audio_files_are_recognised_and_read_in_memory() {
     // Recognised from its bytes even with the wrong name.
     assert_eq!(sniff("notes.bin", &data), Preview::Audio);
     assert_eq!(preview_for_name("song.flac"), Preview::Audio);
-    let (kind, content) = Content::open("a.wav", Zeroizing::new(data)).unwrap();
+    let (kind, content) = Content::open_as("a.wav", Zeroizing::new(data), None).unwrap();
     assert_eq!(kind, Preview::Audio);
     let Content::Audio(a) = content else { panic!() };
     assert_eq!(a.info().duration_ms, 2000);
@@ -297,5 +303,99 @@ fn audio_files_are_recognised_and_read_in_memory() {
     assert_eq!(a.info().channels, 2);
     // Not played yet: nothing touched the sound device.
     assert!(!a.state().playing);
-    assert!(Content::open("b.mp3", Zeroizing::new(b"ID3 junk".to_vec())).is_err());
+    assert!(Content::open_as("b.mp3", Zeroizing::new(b"ID3 junk".to_vec()), None).is_err());
+}
+
+#[test]
+fn open_as_overrides_detection() {
+    let data = b"ssh-ed25519 AAAA key".to_vec();
+    // Plain text is shown as text anyway; a forced kind wins.
+    let (k, _) = Content::open_as("id.pub", Zeroizing::new(data.clone()), None).unwrap();
+    assert_eq!(k, Preview::Text);
+    let (k, _) = Content::open_as(
+        "id.pub",
+        Zeroizing::new(data.clone()),
+        Some(Preview::Markdown),
+    )
+    .unwrap();
+    assert_eq!(k, Preview::Markdown);
+    // Binary forced to text still opens (lossy), but is not editable.
+    let (k, c) = Content::open_as(
+        "x.bin",
+        Zeroizing::new(vec![0xff, 0, 1, 2]),
+        Some(Preview::Text),
+    )
+    .unwrap();
+    assert_eq!(k, Preview::Text);
+    assert!(matches!(
+        c,
+        Content::Text {
+            editable: false,
+            ..
+        }
+    ));
+    // Forced to a picture that is not one: a clear error.
+    assert!(Content::open_as("x.bin", Zeroizing::new(data), Some(Preview::Image)).is_err());
+}
+
+#[test]
+fn pdf_text_can_be_searched() {
+    let doc = PdfDoc::open(Zeroizing::new(pdf_with(
+        b"BT /F1 12 Tf 10 70 Td (Meeting at noon) Tj 0 -20 Td (Bring the Atropos keys) Tj ET",
+    )))
+    .unwrap();
+    let text = doc.page_text(0);
+    assert!(text.contains("Meeting at noon"), "{text:?}");
+    assert!(text.contains("\n"), "lines split: {text:?}");
+    let hits = doc.search("atropos", false);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].page, 0);
+    assert!(hits[0].snippet.contains("Atropos"));
+    assert!(doc.search("atropos", true).is_empty());
+    assert!(doc.search("  ", false).is_empty());
+}
+
+#[test]
+fn picture_edits_rotate_crop_and_save_in_the_same_format() {
+    use super::edit::{apply, encode, ImageOp};
+    let mut img = RgbaImage::new(40, 20);
+    img.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
+    let r = apply(&img, &[ImageOp::RotateRight]).unwrap();
+    assert_eq!((r.width(), r.height()), (20, 40));
+    // The top-left corner moves to the top-right after a right turn.
+    assert_eq!(r.get_pixel(19, 0).0, [255, 0, 0, 255]);
+    let back = apply(&img, &[ImageOp::RotateRight, ImageOp::RotateLeft]).unwrap();
+    assert_eq!(back, img);
+    let f = apply(&img, &[ImageOp::FlipHorizontal]).unwrap();
+    assert_eq!(f.get_pixel(39, 0).0, [255, 0, 0, 255]);
+    let c = apply(
+        &img,
+        &[ImageOp::Crop {
+            left: 0.5,
+            top: 0.0,
+            right: 1.0,
+            bottom: 0.5,
+        }],
+    )
+    .unwrap();
+    assert_eq!((c.width(), c.height()), (20, 10));
+    assert!(apply(
+        &img,
+        &[ImageOp::Crop {
+            left: 0.6,
+            top: 0.0,
+            right: 0.4,
+            bottom: 1.0,
+        }]
+    )
+    .is_err());
+    let s = apply(&img, &[ImageOp::Resize { max_side: 10 }]).unwrap();
+    assert_eq!((s.width(), s.height()), (10, 5));
+    let png = encode(c.clone(), "shot.png").unwrap();
+    assert_eq!(&png[..4], b"\x89PNG");
+    let jpg = encode(c, "shot.JPG").unwrap();
+    assert_eq!(&jpg[..2], b"\xff\xd8");
+    // Plain pictures have no camera details.
+    let d = decode_image(&png).unwrap();
+    assert!(d.details().is_empty());
 }

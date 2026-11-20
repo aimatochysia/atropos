@@ -9,7 +9,8 @@ use super::vault::{parse_id, VaultSession};
 use crate::error::{CoreError, CoreResult};
 use crate::view::{self, markdown, Content, Preview};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PreviewKind {
     Image,
     Pdf,
@@ -28,6 +29,19 @@ impl From<Preview> for PreviewKind {
             Preview::Markdown => PreviewKind::Markdown,
             Preview::Audio => PreviewKind::Audio,
             Preview::None => PreviewKind::None,
+        }
+    }
+}
+
+impl From<PreviewKind> for Preview {
+    fn from(p: PreviewKind) -> Self {
+        match p {
+            PreviewKind::Image => Preview::Image,
+            PreviewKind::Pdf => Preview::Pdf,
+            PreviewKind::Text => Preview::Text,
+            PreviewKind::Markdown => Preview::Markdown,
+            PreviewKind::Audio => Preview::Audio,
+            PreviewKind::None => Preview::None,
         }
     }
 }
@@ -106,6 +120,56 @@ pub struct AudioState {
     pub error: Option<String>,
 }
 
+/// One picture edit, applied in order.
+#[derive(Clone, Copy, Debug)]
+pub enum ImageEdit {
+    RotateLeft,
+    RotateRight,
+    FlipHorizontal,
+    FlipVertical,
+    /// Fractions (0 to 1) of the picture as it is after the edits before.
+    Crop {
+        left: f64,
+        top: f64,
+        right: f64,
+        bottom: f64,
+    },
+    Resize {
+        max_side: u32,
+    },
+}
+
+impl From<ImageEdit> for view::edit::ImageOp {
+    fn from(e: ImageEdit) -> Self {
+        use view::edit::ImageOp as O;
+        match e {
+            ImageEdit::RotateLeft => O::RotateLeft,
+            ImageEdit::RotateRight => O::RotateRight,
+            ImageEdit::FlipHorizontal => O::FlipHorizontal,
+            ImageEdit::FlipVertical => O::FlipVertical,
+            ImageEdit::Crop {
+                left,
+                top,
+                right,
+                bottom,
+            } => O::Crop {
+                left,
+                top,
+                right,
+                bottom,
+            },
+            ImageEdit::Resize { max_side } => O::Resize { max_side },
+        }
+    }
+}
+
+/// A page where "Find" matched.
+pub struct PdfMatch {
+    pub page: u32,
+    pub count: u32,
+    pub snippet: String,
+}
+
 pub struct MdSpan {
     pub text: String,
     pub bold: bool,
@@ -139,6 +203,41 @@ fn closed() -> CoreError {
 }
 
 impl VaultSession {
+    /// Remembers how file `id` opens from now on (None = detect it).
+    pub fn set_open_as(&self, id: String, open_as: Option<PreviewKind>) -> CoreResult<()> {
+        let id = parse_id(&id)?;
+        let value = open_as
+            .filter(|k| *k != PreviewKind::None)
+            .map(|k| Preview::from(k).as_str().to_string());
+        self.with(|v| v.set_open_as(id, value))
+    }
+
+    /// Saves an edited picture from `viewer`: over file `id`, or as a new
+    /// copy beside it. Returns the id of the saved file.
+    pub fn save_edited_image(
+        &self,
+        viewer: &FileViewer,
+        id: String,
+        edits: Vec<ImageEdit>,
+        as_copy: bool,
+    ) -> CoreResult<String> {
+        let id = parse_id(&id)?;
+        let data = viewer.encode_edited(edits)?;
+        self.with(|v| {
+            if as_copy {
+                let name = v
+                    .manifest()
+                    .get(&id)
+                    .map(|e| e.name.clone())
+                    .unwrap_or_default();
+                let copy = copy_name(&name);
+                v.add_copy(id, &copy, &data).map(hex::encode)
+            } else {
+                v.replace_contents(id, &data).map(|_| hex::encode(id))
+            }
+        })
+    }
+
     /// Saves edited text as the new contents of file `id` (UTF-8).
     pub fn save_text(&self, id: String, text: String) -> CoreResult<()> {
         let id = parse_id(&id)?;
@@ -149,7 +248,7 @@ impl VaultSession {
     /// Decrypts file `id` into memory for the viewer.
     pub fn open_viewer(&self, id: String) -> CoreResult<FileViewer> {
         let id = parse_id(&id)?;
-        let (name, data) = self.with(|v| {
+        let (name, data, open_as) = self.with(|v| {
             let entry = v
                 .manifest()
                 .get(&id)
@@ -166,9 +265,10 @@ impl VaultSession {
             }
             let mut buf = Zeroizing::new(Vec::with_capacity(entry.size as usize));
             v.read_file(id, &mut *buf)?;
-            Ok((entry.name, buf))
+            Ok((entry.name, buf, entry.open_as))
         })?;
-        FileViewer::new(name, data, &self.viewers, || self.is_locked())
+        let force = open_as.as_deref().and_then(Preview::parse);
+        FileViewer::new(name, data, force, &self.viewers, || self.is_locked())
     }
 }
 
@@ -180,10 +280,11 @@ impl FileViewer {
     pub(crate) fn new(
         name: String,
         data: Zeroizing<Vec<u8>>,
+        force: Option<Preview>,
         viewers: &Viewers,
         closed_now: impl Fn() -> bool,
     ) -> CoreResult<FileViewer> {
-        let (kind, content) = Content::open(&name, data)?;
+        let (kind, content) = Content::open_as(&name, data, force)?;
         let content = Arc::new(Mutex::new(Some(content)));
         let mut list = viewers.lock().unwrap_or_else(|e| e.into_inner());
         list.retain(|w| w.strong_count() > 0);
@@ -262,6 +363,70 @@ impl FileViewer {
         })
     }
 
+    /// The picture with `edits` applied, scaled to fit, for the editor's
+    /// preview.
+    pub fn render_edited(
+        &self,
+        edits: Vec<ImageEdit>,
+        max_width: u32,
+        max_height: u32,
+    ) -> CoreResult<RenderedPicture> {
+        self.with(|c| match c {
+            Content::Image(d) => {
+                let ops: Vec<_> = edits.into_iter().map(Into::into).collect();
+                let edited = view::edit::apply(d.image(), &ops)?;
+                Ok(view::scale_picture(&edited, max_width, max_height).into())
+            }
+            _ => Err(wrong_kind()),
+        })
+    }
+
+    /// Encodes the picture with `edits` applied, in its own format.
+    pub(crate) fn encode_edited(&self, edits: Vec<ImageEdit>) -> CoreResult<Zeroizing<Vec<u8>>> {
+        let name = self.name.clone();
+        self.with(|c| match c {
+            Content::Image(d) if d.animated() => Err(CoreError::InvalidInput {
+                message: "animated pictures cannot be edited yet".into(),
+            }),
+            Content::Image(d) => {
+                let ops: Vec<_> = edits.into_iter().map(Into::into).collect();
+                view::edit::encode(view::edit::apply(d.image(), &ops)?, &name)
+            }
+            _ => Err(wrong_kind()),
+        })
+    }
+
+    /// Camera details of a photo (empty when it has none).
+    pub fn photo_details(&self) -> CoreResult<Vec<DetailRow>> {
+        self.with(|c| match c {
+            Content::Image(d) => Ok(d
+                .details()
+                .iter()
+                .map(|x| DetailRow {
+                    label: x.label.clone(),
+                    value: x.value.clone(),
+                })
+                .collect()),
+            _ => Err(wrong_kind()),
+        })
+    }
+
+    /// Pages where `query` appears, for "Find" in a PDF.
+    pub fn pdf_search(&self, query: String, match_case: bool) -> CoreResult<Vec<PdfMatch>> {
+        self.with(|c| match c {
+            Content::Pdf(p) => Ok(p
+                .search(&query, match_case)
+                .into_iter()
+                .map(|h| PdfMatch {
+                    page: h.page,
+                    count: h.count,
+                    snippet: h.snippet,
+                })
+                .collect()),
+            _ => Err(wrong_kind()),
+        })
+    }
+
     /// Each page's size in points (1/72 inch).
     pub fn pdf_pages(&self) -> CoreResult<Vec<PictureSize>> {
         self.with(|c| match c {
@@ -327,27 +492,7 @@ impl FileViewer {
 
     pub fn markdown(&self) -> CoreResult<Vec<MdBlock>> {
         self.with(|c| match c {
-            Content::Text { text, .. } => Ok(markdown::parse(text)
-                .into_iter()
-                .map(|b| MdBlock {
-                    kind: b.kind,
-                    level: b.level,
-                    number: b.number.min(u32::MAX as u64) as u32,
-                    flag: b.flag,
-                    spans: b
-                        .spans
-                        .into_iter()
-                        .map(|s| MdSpan {
-                            text: s.text,
-                            bold: s.bold,
-                            italic: s.italic,
-                            code: s.code,
-                            strike: s.strike,
-                            link: s.link,
-                        })
-                        .collect(),
-                })
-                .collect()),
+            Content::Text { text, .. } => Ok(md_blocks(text)),
             _ => Err(wrong_kind()),
         })
     }
@@ -416,6 +561,50 @@ impl FileViewer {
     #[frb(sync)]
     pub fn close(&self) {
         *self.content.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+/// "photo.jpg" -> "photo (edited).jpg".
+fn md_blocks(text: &str) -> Vec<MdBlock> {
+    markdown::parse(text)
+        .into_iter()
+        .map(|b| MdBlock {
+            kind: b.kind,
+            level: b.level,
+            number: b.number.min(u32::MAX as u64) as u32,
+            flag: b.flag,
+            spans: b
+                .spans
+                .into_iter()
+                .map(|s| MdSpan {
+                    text: s.text,
+                    bold: s.bold,
+                    italic: s.italic,
+                    code: s.code,
+                    strike: s.strike,
+                    link: s.link,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// Lays out Markdown that is not secret, such as release notes.
+#[frb(sync)]
+pub fn parse_markdown(text: String) -> Vec<MdBlock> {
+    md_blocks(&text)
+}
+
+/// One labelled line of file details.
+pub struct DetailRow {
+    pub label: String,
+    pub value: String,
+}
+
+pub(crate) fn copy_name(name: &str) -> String {
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => format!("{stem} (edited).{ext}"),
+        _ => format!("{name} (edited)"),
     }
 }
 
