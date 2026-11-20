@@ -615,6 +615,26 @@ class _VaultPageState extends State<VaultPage> {
     );
   }
 
+  Future<void> _rekey() async {
+    final app = AppScope.read(context);
+    final oldId = _s.vaultId;
+    // The old session locks during the re-key; don't treat that as a lock.
+    _closing = true;
+    final fresh = await rekeyFlow(context, _s);
+    if (fresh == null) {
+      _closing = false;
+      return;
+    }
+    try {
+      await app.biometrics.remove(oldId);
+    } catch (_) {}
+    await app.opened(fresh);
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(builder: (_) => VaultPage(session: fresh)),
+    );
+  }
+
   Future<void> _lock() async {
     await AppScope.read(context).lock(_s.path);
   }
@@ -706,6 +726,7 @@ class _VaultPageState extends State<VaultPage> {
                       'info' => _info(),
                       'password' => _changePassword(),
                       'strength' => passwordStrengthFlow(context, _s),
+                      'rekey' => _rekey(),
                       'check' =>
                         Navigator.of(context)
                             .push(
@@ -757,6 +778,10 @@ class _VaultPageState extends State<VaultPage> {
                       PopupMenuItem(
                         value: 'check',
                         child: Text('Check and repair'),
+                      ),
+                      PopupMenuItem(
+                        value: 'rekey',
+                        child: Text('Re-key vault'),
                       ),
                     ],
                   ),

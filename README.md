@@ -35,6 +35,9 @@ validated module.
   missing files, leftovers from interrupted writes and unreadable parts of the
   file list (which no longer stop the vault from opening), and fixes them.
   Password protection strength can be set to 64 MB, 256 MB or 1 GB.
+- v0.5.1: "Re-key vault" re-encrypts everything under all-new keys and a new
+  recovery phrase (password unchanged), for when a key or phrase may have
+  leaked. Earlier copies still open with the old credentials.
 
 ## Building
 

@@ -14,6 +14,7 @@ pub mod header;
 pub mod manifest;
 pub mod package;
 pub mod recovery;
+pub mod rekey;
 
 use std::fs;
 use std::io::{Read, Write};
@@ -72,6 +73,7 @@ pub fn is_vault(path: &Path) -> bool {
 
 /// Reads the header of a locked vault (for showing its name and slots).
 pub fn read_header(path: &Path) -> CoreResult<HeaderFile> {
+    rekey::recover_interrupted(path);
     let bytes = fs::read(path.join(HEADER_FILE)).map_err(|_| CoreError::InvalidInput {
         message: format!("no Atropos vault at {}", path.display()),
     })?;

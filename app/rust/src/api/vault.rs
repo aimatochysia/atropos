@@ -43,6 +43,7 @@ pub struct VaultInfo {
     pub vault_id: String,
 }
 
+#[derive(Clone)]
 pub struct ProgressInfo {
     pub files_done: u64,
     pub files_total: u64,
@@ -157,10 +158,46 @@ pub struct VaultSession {
     pub(crate) viewers: Arc<Mutex<Vec<Weak<crate::view::Slot>>>>,
 }
 
+#[derive(Clone)]
+pub struct RekeyDone {
+    /// The re-keyed vault, already unlocked. The old session is locked.
+    pub session: VaultSession,
+    /// Shown once; the old phrase no longer opens this copy.
+    pub recovery_phrase: String,
+}
+
+/// A step of a re-key (opaque because it carries a session).
+pub enum RekeyEvent {
+    Progress(ProgressInfo),
+    Done(RekeyDone),
+}
+
+impl RekeyEvent {
+    #[frb(sync)]
+    pub fn progress(&self) -> Option<ProgressInfo> {
+        match self {
+            RekeyEvent::Progress(p) => Some(p.clone()),
+            RekeyEvent::Done(_) => None,
+        }
+    }
+
+    #[frb(sync)]
+    pub fn done(&self) -> Option<RekeyDone> {
+        match self {
+            RekeyEvent::Done(d) => Some(d.clone()),
+            RekeyEvent::Progress(_) => None,
+        }
+    }
+}
+
 pub struct CreatedVault {
     pub session: VaultSession,
     /// Shown once so the person can write it down; never stored.
     pub recovery_phrase: String,
+}
+
+pub(crate) fn new_session(v: Vault) -> VaultSession {
+    session(v)
 }
 
 fn session(v: Vault) -> VaultSession {
@@ -292,6 +329,24 @@ fn locked() -> CoreError {
 }
 
 impl VaultSession {
+    /// Runs `f` on the vault and, when it succeeds, takes the vault out of
+    /// this session (which then reads as locked) and returns it.
+    pub(crate) fn take_for_rekey<T>(
+        &self,
+        f: impl FnOnce(&mut Vault) -> CoreResult<T>,
+    ) -> CoreResult<(Vault, T)> {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let v = g.as_mut().ok_or_else(locked)?;
+        let out = f(v)?;
+        let vault = g.take().ok_or_else(locked)?;
+        drop(g);
+        let viewers = std::mem::take(&mut *self.viewers.lock().unwrap_or_else(|e| e.into_inner()));
+        for v in viewers.iter().filter_map(Weak::upgrade) {
+            *v.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+        Ok((vault, out))
+    }
+
     /// Like `with`, but gives up instead of waiting while a task runs.
     pub(crate) fn try_with<T>(&self, f: impl FnOnce(&Vault) -> T) -> Option<T> {
         let g = self.inner.try_lock().ok()?;

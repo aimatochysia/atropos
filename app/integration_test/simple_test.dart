@@ -481,4 +481,36 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await s.lock();
   });
+
+  testWidgets('re-key keeps the files and changes the keys', (tester) async {
+    final src = Directory('${tmp.path}/src')..createSync();
+    File('${src.path}/a.txt').writeAsStringSync('alpha');
+    final created = await createVault(
+      parentDir: tmp.path,
+      name: 'Rekey',
+      password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+    );
+    final s = created.session;
+    await finish(
+      s.import_(sources: ['${src.path}/a.txt'], deleteOriginals: false),
+    );
+    final oldId = s.vaultId;
+    RekeyDone? done;
+    await for (final e in s.rekey(
+      password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+    )) {
+      done = e.done() ?? done;
+    }
+    expect(done, isNotNull);
+    expect(s.isLocked(), isTrue);
+    final fresh = done!.session;
+    expect(fresh.vaultId, isNot(oldId));
+    expect(done.recoveryPhrase, isNot(created.recoveryPhrase));
+    expect((await fresh.list()).map((e) => e.name), ['a.txt']);
+    await fresh.lock();
+    await unlockWithRecoveryPhrase(
+      path: fresh.path,
+      phrase: SecretInput.fromText(text: done.recoveryPhrase),
+    );
+  });
 }
