@@ -8,7 +8,7 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `closed`, `with`, `wrong_kind`
+// These functions are ignored because they are not marked as `pub`: `closed`, `new`, `with`, `wrong_kind`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `eq`, `fmt`, `from`, `from`
 
 /// What the viewer can likely show for a file, judged from its name.
@@ -21,9 +21,29 @@ String describeFileType({required String name}) =>
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FileViewer>>
 abstract class FileViewer implements RustOpaqueInterface {
+  Future<AudioInfo> audioInfo();
+
+  Future<void> audioPause();
+
+  /// Starts or resumes playback; from the start again once it ended.
+  Future<void> audioPlay();
+
+  Future<void> audioSeek({required int positionMs});
+
+  /// Where playback is; cheap enough to ask a few times a second.
+  AudioState audioState();
+
   /// Wipes the plaintext now rather than when Dart's garbage collector
   /// gets round to it.
   void close();
+
+  /// The whole text exactly as stored, for editing. Refused when the file
+  /// is too long for the viewer, so an edit can never cut it short.
+  Future<String> editableText();
+
+  /// How long each frame shows, in milliseconds: one entry per frame, so
+  /// a still picture gives one.
+  Future<Uint32List> frameDelays();
 
   /// The picture's full size in pixels.
   Future<PictureSize> imageSize();
@@ -36,6 +56,13 @@ abstract class FileViewer implements RustOpaqueInterface {
 
   /// Each page's size in points (1/72 inch).
   Future<List<PictureSize>> pdfPages();
+
+  /// Frame `index` of an animation scaled to fit.
+  Future<RenderedPicture> renderFrame({
+    required int index,
+    required int maxWidth,
+    required int maxHeight,
+  });
 
   /// The picture scaled to fit `max_width`×`max_height` pixels.
   Future<RenderedPicture> renderImage({
@@ -51,6 +78,75 @@ abstract class FileViewer implements RustOpaqueInterface {
   });
 
   Future<TextView> text();
+}
+
+class AudioInfo {
+  final int durationMs;
+  final int sampleRate;
+  final int channels;
+  final String title;
+  final String artist;
+  final String album;
+
+  const AudioInfo({
+    required this.durationMs,
+    required this.sampleRate,
+    required this.channels,
+    required this.title,
+    required this.artist,
+    required this.album,
+  });
+
+  @override
+  int get hashCode =>
+      durationMs.hashCode ^
+      sampleRate.hashCode ^
+      channels.hashCode ^
+      title.hashCode ^
+      artist.hashCode ^
+      album.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AudioInfo &&
+          runtimeType == other.runtimeType &&
+          durationMs == other.durationMs &&
+          sampleRate == other.sampleRate &&
+          channels == other.channels &&
+          title == other.title &&
+          artist == other.artist &&
+          album == other.album;
+}
+
+class AudioState {
+  final int positionMs;
+  final bool playing;
+  final bool ended;
+
+  /// Set when the sound device failed.
+  final String? error;
+
+  const AudioState({
+    required this.positionMs,
+    required this.playing,
+    required this.ended,
+    this.error,
+  });
+
+  @override
+  int get hashCode =>
+      positionMs.hashCode ^ playing.hashCode ^ ended.hashCode ^ error.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AudioState &&
+          runtimeType == other.runtimeType &&
+          positionMs == other.positionMs &&
+          playing == other.playing &&
+          ended == other.ended &&
+          error == other.error;
 }
 
 class MdBlock {
@@ -157,7 +253,7 @@ class PictureSize {
           height == other.height;
 }
 
-enum PreviewKind { image, pdf, text, markdown, none }
+enum PreviewKind { image, pdf, text, markdown, audio, none }
 
 /// Decoded pixels: straight RGBA, `width * 4` bytes per row.
 class RenderedPicture {
@@ -190,10 +286,17 @@ class TextView {
   /// The file was longer than the viewer shows.
   final bool truncated;
 
-  const TextView({required this.lines, required this.truncated});
+  /// [FileViewer::editable_text] will work.
+  final bool editable;
+
+  const TextView({
+    required this.lines,
+    required this.truncated,
+    required this.editable,
+  });
 
   @override
-  int get hashCode => lines.hashCode ^ truncated.hashCode;
+  int get hashCode => lines.hashCode ^ truncated.hashCode ^ editable.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -201,5 +304,6 @@ class TextView {
       other is TextView &&
           runtimeType == other.runtimeType &&
           lines == other.lines &&
-          truncated == other.truncated;
+          truncated == other.truncated &&
+          editable == other.editable;
 }

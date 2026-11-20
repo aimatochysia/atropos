@@ -1,5 +1,8 @@
 #![deny(unsafe_code)]
 
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+mod android;
 pub mod api;
 pub(crate) mod card;
 pub(crate) mod crypto;

@@ -10,6 +10,7 @@ import '../src/rust/api/viewer.dart';
 import '../state/app_controller.dart';
 import 'card_flows.dart';
 import 'check_page.dart';
+import 'package_browser_page.dart';
 import 'package_flows.dart';
 import 'recovery_page.dart';
 import 'secret_dialog.dart';
@@ -99,8 +100,11 @@ class _VaultPageState extends State<VaultPage> {
   void _view(EntryInfo e) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            ViewerPage(session: _s, entry: e, onExport: () => _export([e])),
+        builder: (_) => ViewerPage.vault(
+          session: _s,
+          entry: e,
+          onExport: () => _export([e]),
+        ),
       ),
     );
   }
@@ -747,13 +751,18 @@ class _VaultPageState extends State<VaultPage> {
                         _s,
                         _parent,
                       ).then((ok) => ok ? _reload() : null),
+                      'browse' => browsePackageFlow(context, vault: _s),
                       _ => null,
                     },
                     itemBuilder: (_) => const [
                       PopupMenuItem(value: 'info', child: Text('Vault info')),
                       PopupMenuItem(
+                        value: 'browse',
+                        child: Text('View a package'),
+                      ),
+                      PopupMenuItem(
                         value: 'package',
-                        child: Text('Open package'),
+                        child: Text('Add a package to this vault'),
                       ),
                       PopupMenuItem(
                         value: 'password',

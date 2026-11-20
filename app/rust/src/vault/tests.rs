@@ -556,3 +556,27 @@ fn an_interrupted_rekey_swap_puts_the_old_vault_back() {
     let v = Vault::unlock(&vpath, &Unlock::Password(PW)).unwrap();
     assert!(v.manifest().children(None).iter().any(|e| e.name == "kept"));
 }
+
+#[test]
+fn edited_contents_replace_the_old_blob() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vpath = tmp.path().join("v");
+    let (mut v, _) = Vault::create(&vpath, PW, fast()).unwrap();
+    let src = tmp.path().join("notes.txt");
+    fs::write(&src, b"first version").unwrap();
+    v.import(&[src], None, false, &mut |_| {}).unwrap();
+    let id = v.manifest().children(None)[0].id;
+    let before = all_files(&vpath.join(OBJECTS_DIR));
+    v.replace_contents(id, "second, longer version ✓".as_bytes())
+        .unwrap();
+    let mut out = Vec::new();
+    v.read_file(id, &mut out).unwrap();
+    assert_eq!(out, "second, longer version ✓".as_bytes());
+    let e = v.manifest().get(&id).unwrap();
+    assert_eq!(e.size, out.len() as u64);
+    assert_eq!(e.name, "notes.txt");
+    assert!(before.iter().all(|b| !b.exists()), "old blob removed");
+    assert!(v.check(&mut |_| {}).unwrap().is_clean());
+    let folder = v.create_folder(None, "dir").unwrap();
+    assert!(v.replace_contents(folder, b"x").is_err());
+}

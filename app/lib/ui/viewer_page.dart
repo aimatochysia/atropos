@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -5,9 +6,11 @@ import 'package:flutter/material.dart';
 
 import '../core/errors.dart';
 import '../core/format.dart';
+import '../core/secure_clipboard.dart';
 import '../src/rust/api/vault.dart';
 import '../src/rust/api/viewer.dart';
 import '../state/app_controller.dart';
+import 'widgets/feedback.dart';
 
 /// Turns pixels Rust decoded into a GPU image, then zeroes the Dart copy.
 Future<ui.Image> pictureToImage(RenderedPicture p) async {
@@ -35,24 +38,43 @@ IconData previewIcon(PreviewKind k) => switch (k) {
   PreviewKind.pdf => Icons.picture_as_pdf_outlined,
   PreviewKind.text => Icons.description_outlined,
   PreviewKind.markdown => Icons.article_outlined,
+  PreviewKind.audio => Icons.audiotrack_outlined,
   PreviewKind.none => Icons.insert_drive_file_outlined,
 };
 
-/// Shows one file from the vault. The plaintext stays in Rust; it is wiped
-/// when this page closes or the vault locks.
+/// Shows one file from a vault or a package. The plaintext stays in Rust;
+/// it is wiped when this page closes or the app locks.
 class ViewerPage extends StatefulWidget {
   const ViewerPage({
     super.key,
-    required this.session,
     required this.entry,
-    required this.onExport,
+    required this.open,
+    required this.isClosed,
+    this.onExport,
+    this.onSave,
   });
 
-  final VaultSession session;
-  final EntryInfo entry;
+  /// A file in an unlocked vault: viewable, editable and exportable.
+  ViewerPage.vault({
+    super.key,
+    required VaultSession session,
+    required this.entry,
+    required Future<void> Function() this.onExport,
+  }) : open = (() => session.openViewer(id: entry.id)),
+       isClosed = (() => session.isLocked()),
+       onSave = ((text) => session.saveText(id: entry.id, text: text));
 
-  /// Runs the usual export flow, with its confirmation.
-  final Future<void> Function() onExport;
+  final EntryInfo entry;
+  final Future<FileViewer> Function() open;
+
+  /// True once the vault or package the file came from has closed.
+  final bool Function() isClosed;
+
+  /// Runs the usual export flow, with its confirmation. None for packages.
+  final Future<void> Function()? onExport;
+
+  /// Saves edited text back. None where files are read-only.
+  final Future<void> Function(String text)? onSave;
 
   @override
   State<ViewerPage> createState() => _ViewerPageState();
@@ -61,6 +83,7 @@ class ViewerPage extends StatefulWidget {
 class _ViewerPageState extends State<ViewerPage> {
   FileViewer? _viewer;
   String? _error;
+  int _version = 0;
 
   @override
   void initState() {
@@ -70,12 +93,16 @@ class _ViewerPageState extends State<ViewerPage> {
 
   Future<void> _open() async {
     try {
-      final v = await widget.session.openViewer(id: widget.entry.id);
+      final v = await widget.open();
       if (!mounted) {
         v.close();
         return;
       }
-      setState(() => _viewer = v);
+      setState(() {
+        _viewer?.close();
+        _viewer = v;
+        _version++;
+      });
     } catch (e) {
       if (mounted) setState(() => _error = describeError(e));
     }
@@ -84,8 +111,8 @@ class _ViewerPageState extends State<ViewerPage> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final app = AppScope.of(context);
-    if (!app.isOpen(widget.session.path)) _viewer?.close();
+    AppScope.of(context);
+    if (widget.isClosed()) _viewer?.close();
   }
 
   @override
@@ -94,19 +121,55 @@ class _ViewerPageState extends State<ViewerPage> {
     super.dispose();
   }
 
+  Future<void> _edit(FileViewer v) async {
+    final String text;
+    try {
+      text = await v.editableText();
+    } catch (e) {
+      if (mounted) showMessage(context, describeError(e), error: true);
+      return;
+    }
+    if (!mounted) return;
+    final saved = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => TextEditorPage(
+          name: widget.entry.name,
+          initial: text,
+          onSave: widget.onSave!,
+        ),
+      ),
+    );
+    if (saved == true && mounted) {
+      showMessage(context, 'Saved into the vault.');
+      await _open();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final v = _viewer;
+    final canEdit =
+        widget.onSave != null &&
+        v != null &&
+        (v.kind == PreviewKind.text || v.kind == PreviewKind.markdown);
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.entry.name, overflow: TextOverflow.ellipsis),
         actions: [
-          IconButton(
-            key: const Key('viewer-export'),
-            tooltip: 'Export unencrypted…',
-            icon: const Icon(Icons.file_download_outlined),
-            onPressed: widget.onExport,
-          ),
+          if (canEdit)
+            IconButton(
+              key: const Key('viewer-edit'),
+              tooltip: 'Edit',
+              icon: const Icon(Icons.edit_outlined),
+              onPressed: () => _edit(v),
+            ),
+          if (widget.onExport != null)
+            IconButton(
+              key: const Key('viewer-export'),
+              tooltip: 'Export unencrypted…',
+              icon: const Icon(Icons.file_download_outlined),
+              onPressed: widget.onExport,
+            ),
         ],
       ),
       body: _error != null
@@ -117,16 +180,23 @@ class _ViewerPageState extends State<ViewerPage> {
             )
           : v == null
           ? const Center(child: CircularProgressIndicator())
-          : switch (v.kind) {
-              PreviewKind.image => ImageView(viewer: v),
-              PreviewKind.pdf => PdfView(viewer: v),
-              PreviewKind.markdown => MarkdownView(viewer: v),
-              PreviewKind.text => TextFileView(viewer: v),
-              PreviewKind.none => FileDetails(
-                entry: widget.entry,
-                onExport: widget.onExport,
-              ),
-            },
+          : KeyedSubtree(
+              key: ValueKey(_version),
+              child: switch (v.kind) {
+                PreviewKind.image => ImageView(viewer: v),
+                PreviewKind.pdf => PdfView(viewer: v),
+                PreviewKind.markdown => MarkdownView(viewer: v),
+                PreviewKind.text => TextFileView(viewer: v),
+                PreviewKind.audio => AudioView(
+                  viewer: v,
+                  name: widget.entry.name,
+                ),
+                PreviewKind.none => FileDetails(
+                  entry: widget.entry,
+                  onExport: widget.onExport,
+                ),
+              },
+            ),
     );
   }
 }
@@ -141,7 +211,7 @@ class FileDetails extends StatelessWidget {
   });
 
   final EntryInfo entry;
-  final Future<void> Function() onExport;
+  final Future<void> Function()? onExport;
   final String? message;
 
   @override
@@ -171,19 +241,23 @@ class FileDetails extends StatelessWidget {
         const SizedBox(height: 24),
         Text(
           message ??
-              'Atropos keeps this file encrypted but cannot show it. Export '
-                  'it to open it in another app.',
+              (onExport != null
+                  ? 'Atropos keeps this file encrypted but cannot show it. '
+                        'Export it to open it in another app.'
+                  : 'Atropos cannot show this kind of file.'),
           key: const Key('viewer-message'),
           textAlign: TextAlign.center,
         ),
-        const SizedBox(height: 16),
-        Center(
-          child: OutlinedButton.icon(
-            onPressed: onExport,
-            icon: const Icon(Icons.file_download_outlined),
-            label: const Text('Export unencrypted…'),
+        if (onExport != null) ...[
+          const SizedBox(height: 16),
+          Center(
+            child: OutlinedButton.icon(
+              onPressed: onExport,
+              icon: const Icon(Icons.file_download_outlined),
+              label: const Text('Export unencrypted…'),
+            ),
           ),
-        ),
+        ],
       ],
     );
   }
@@ -223,21 +297,36 @@ class _ImageViewState extends State<ImageView> {
   int _wanted = 0;
   bool _sharp = false;
 
+  /// Frame times of an animation (null for a still picture).
+  List<int>? _delays;
+  final Map<int, ui.Image> _frames = {};
+  int _frame = 0;
+  bool _playing = true;
+  Timer? _tick;
+
   @override
   void initState() {
     super.initState();
     _zoom.addListener(_onZoom);
-    widget.viewer.imageSize().then(
-      (s) {
-        if (mounted) setState(() => _full = Size(s.width, s.height));
-      },
-      onError: (Object e) {
-        if (mounted) setState(() => _error = e);
-      },
-    );
+    _start();
+  }
+
+  Future<void> _start() async {
+    try {
+      final s = await widget.viewer.imageSize();
+      final d = await widget.viewer.frameDelays();
+      if (!mounted) return;
+      setState(() {
+        _full = Size(s.width, s.height);
+        if (d.length > 1) _delays = d.toList();
+      });
+    } catch (e) {
+      if (mounted) setState(() => _error = e);
+    }
   }
 
   void _onZoom() {
+    if (_delays != null) return;
     if (!_sharp && _zoom.value.getMaxScaleOnAxis() > 1.8 && _box != null) {
       _sharp = true;
       _render(_box!, factor: 6);
@@ -245,6 +334,7 @@ class _ImageViewState extends State<ImageView> {
   }
 
   Future<void> _render(Size box, {double factor = 2}) async {
+    if (_delays != null) return _restartAnimation(box);
     final dpr = MediaQuery.devicePixelRatioOf(context);
     final ticket = ++_wanted;
     try {
@@ -266,10 +356,84 @@ class _ImageViewState extends State<ImageView> {
     }
   }
 
+  // Animations: every frame is rendered once at screen size and kept, then
+  // shown in turn. Rust already capped the total size of all frames.
+
+  void _clearFrames() {
+    _tick?.cancel();
+    for (final f in _frames.values) {
+      f.dispose();
+    }
+    _frames.clear();
+    _image = null;
+  }
+
+  Future<void> _restartAnimation(Size box) async {
+    final ticket = ++_wanted;
+    setState(_clearFrames);
+    _frame = 0;
+    await _show(0, box, ticket);
+  }
+
+  Future<ui.Image?> _frameImage(int i, Size box, int ticket) async {
+    final have = _frames[i];
+    if (have != null) return have;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final p = await widget.viewer.renderFrame(
+      index: i,
+      maxWidth: (box.width * dpr).ceil(),
+      maxHeight: (box.height * dpr).ceil(),
+    );
+    final img = await pictureToImage(p);
+    if (!mounted || ticket != _wanted) {
+      img.dispose();
+      return null;
+    }
+    _frames[i] = img;
+    return img;
+  }
+
+  Future<void> _show(int i, Size box, int ticket) async {
+    final delays = _delays!;
+    try {
+      final img = await _frameImage(i, box, ticket);
+      if (img == null || !mounted || ticket != _wanted) return;
+      setState(() {
+        _frame = i;
+        _image = img;
+      });
+      _tick?.cancel();
+      if (_playing) {
+        _tick = Timer(Duration(milliseconds: delays[i]), () {
+          if (mounted && ticket == _wanted) {
+            _show((i + 1) % delays.length, box, ticket);
+          }
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = e);
+    }
+  }
+
+  void _togglePlay() {
+    setState(() => _playing = !_playing);
+    final box = _box;
+    if (_playing && box != null) {
+      _show((_frame + 1) % _delays!.length, box, _wanted);
+    } else {
+      _tick?.cancel();
+    }
+  }
+
   @override
   void dispose() {
     _zoom.dispose();
-    _image?.dispose();
+    _tick?.cancel();
+    if (_delays != null) {
+      _clearFrames();
+    } else {
+      _image?.dispose();
+    }
     super.dispose();
   }
 
@@ -289,17 +453,32 @@ class _ImageViewState extends State<ImageView> {
         if (img == null) {
           return const Center(child: CircularProgressIndicator());
         }
-        return InteractiveViewer(
-          transformationController: _zoom,
-          maxScale: 12,
-          child: SizedBox.expand(
-            child: RawImage(
-              key: const Key('viewer-image'),
-              image: img,
-              fit: BoxFit.contain,
-              filterQuality: FilterQuality.medium,
+        return Stack(
+          children: [
+            InteractiveViewer(
+              transformationController: _zoom,
+              maxScale: 12,
+              child: SizedBox.expand(
+                child: RawImage(
+                  key: const Key('viewer-image'),
+                  image: img,
+                  fit: BoxFit.contain,
+                  filterQuality: FilterQuality.medium,
+                ),
+              ),
             ),
-          ),
+            if (_delays != null)
+              Positioned(
+                right: 12,
+                bottom: 12,
+                child: FloatingActionButton.small(
+                  key: const Key('viewer-animation'),
+                  tooltip: _playing ? 'Pause' : 'Play',
+                  onPressed: _togglePlay,
+                  child: Icon(_playing ? Icons.pause : Icons.play_arrow),
+                ),
+              ),
+          ],
         );
       },
     );
@@ -602,16 +781,53 @@ class _TextFileViewState extends State<TextFileView> {
         child: SizedBox(width: 4000, child: list),
       );
     }
+    // Long-press or drag to select; Copy goes through the clipboard guard.
+    list = SelectionArea(
+      contextMenuBuilder: (context, sel) =>
+          AdaptiveTextSelectionToolbar.buttonItems(
+            anchors: sel.contextMenuAnchors,
+            buttonItems: SecureClipboard.guard(
+              context,
+              sel.contextMenuButtonItems,
+            ),
+          ),
+      child: list,
+    );
     return Stack(
       children: [
         list,
         Positioned(
           right: 12,
           bottom: 12,
-          child: FloatingActionButton.small(
-            tooltip: _wrap ? 'Don\'t wrap lines' : 'Wrap lines',
-            onPressed: () => setState(() => _wrap = !_wrap),
-            child: Icon(_wrap ? Icons.wrap_text : Icons.notes),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              FloatingActionButton.small(
+                key: const Key('viewer-copy-all'),
+                heroTag: null,
+                tooltip: 'Copy all',
+                onPressed: () async {
+                  await SecureClipboard.copy(t.lines.join('\n'));
+                  if (context.mounted) {
+                    showMessage(
+                      context,
+                      t.truncated
+                          ? 'Copied the part that is shown. Atropos clears '
+                                'the clipboard after 60 seconds or when it locks.'
+                          : SecureClipboard.notice,
+                    );
+                  }
+                },
+                child: const Icon(Icons.copy_all_outlined),
+              ),
+              const SizedBox(height: 8),
+              FloatingActionButton.small(
+                heroTag: null,
+                tooltip: _wrap ? 'Don\'t wrap lines' : 'Wrap lines',
+                onPressed: () => setState(() => _wrap = !_wrap),
+                child: Icon(_wrap ? Icons.wrap_text : Icons.notes),
+              ),
+            ],
           ),
         ),
       ],
@@ -780,11 +996,322 @@ class _MarkdownViewState extends State<MarkdownView> {
       alignment: Alignment.topCenter,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 760),
-        child: ListView.builder(
-          key: const Key('viewer-markdown'),
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
-          itemCount: blocks.length,
-          itemBuilder: (context, i) => _block(context, blocks[i]),
+        child: SelectionArea(
+          contextMenuBuilder: (context, sel) =>
+              AdaptiveTextSelectionToolbar.buttonItems(
+                anchors: sel.contextMenuAnchors,
+                buttonItems: SecureClipboard.guard(
+                  context,
+                  sel.contextMenuButtonItems,
+                ),
+              ),
+          child: ListView.builder(
+            key: const Key('viewer-markdown'),
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+            itemCount: blocks.length,
+            itemBuilder: (context, i) => _block(context, blocks[i]),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---- editing -------------------------------------------------------------
+
+/// Edits a text file; Save writes it back into the vault as a new
+/// encrypted copy and removes the old one.
+class TextEditorPage extends StatefulWidget {
+  const TextEditorPage({
+    super.key,
+    required this.name,
+    required this.initial,
+    required this.onSave,
+  });
+
+  final String name;
+  final String initial;
+  final Future<void> Function(String text) onSave;
+
+  @override
+  State<TextEditorPage> createState() => _TextEditorPageState();
+}
+
+class _TextEditorPageState extends State<TextEditorPage> {
+  late final _text = TextEditingController(text: widget.initial);
+  bool _saving = false;
+
+  bool get _changed => _text.text != widget.initial;
+
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    try {
+      await widget.onSave(_text.text);
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        showMessage(context, describeError(e), error: true);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return PopScope(
+      canPop: !_changed || _saving,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        final discard = await confirm(
+          context,
+          title: 'Discard changes?',
+          message: 'Your edits to ${widget.name} are not saved.',
+          action: 'Discard',
+          destructive: true,
+        );
+        if (discard && context.mounted) Navigator.of(context).pop(false);
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text('Edit ${widget.name}', overflow: TextOverflow.ellipsis),
+          actions: [
+            ListenableBuilder(
+              listenable: _text,
+              builder: (context, _) => TextButton.icon(
+                key: const Key('editor-save'),
+                onPressed: _changed && !_saving ? _save : null,
+                icon: _saving
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.save_outlined),
+                label: const Text('Save'),
+              ),
+            ),
+          ],
+        ),
+        body: Padding(
+          padding: const EdgeInsets.all(8),
+          child: TextField(
+            key: const Key('editor-field'),
+            controller: _text,
+            expands: true,
+            maxLines: null,
+            textAlignVertical: TextAlignVertical.top,
+            keyboardType: TextInputType.multiline,
+            // Keep the keyboard from learning words from private files.
+            autocorrect: false,
+            enableSuggestions: false,
+            enableIMEPersonalizedLearning: false,
+            contextMenuBuilder: (context, state) =>
+                AdaptiveTextSelectionToolbar.buttonItems(
+                  anchors: state.contextMenuAnchors,
+                  buttonItems: SecureClipboard.guard(
+                    context,
+                    state.contextMenuButtonItems,
+                  ),
+                ),
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontFamilyFallback: const ['Menlo', 'Consolas', 'Courier New'],
+              fontSize: 14,
+              height: 1.4,
+              color: scheme.onSurface,
+            ),
+            decoration: const InputDecoration(border: InputBorder.none),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---- audio ---------------------------------------------------------------
+
+String _clock(int ms) {
+  final s = ms ~/ 1000;
+  final h = s ~/ 3600;
+  final m = (s % 3600) ~/ 60;
+  final sec = (s % 60).toString().padLeft(2, '0');
+  return h > 0 ? '$h:${m.toString().padLeft(2, '0')}:$sec' : '$m:$sec';
+}
+
+/// Plays audio inside Atropos: Rust decodes it in memory and sends it to
+/// the speakers itself, so no other app or file ever gets the sound.
+class AudioView extends StatefulWidget {
+  const AudioView({super.key, required this.viewer, required this.name});
+  final FileViewer viewer;
+  final String name;
+
+  @override
+  State<AudioView> createState() => _AudioViewState();
+}
+
+class _AudioViewState extends State<AudioView> {
+  AudioInfo? _info;
+  AudioState? _state;
+  Object? _error;
+  double? _dragging;
+  Timer? _poll;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.viewer.audioInfo().then(
+      (i) {
+        if (mounted) setState(() => _info = i);
+      },
+      onError: (Object e) {
+        if (mounted) setState(() => _error = e);
+      },
+    );
+    _poll = Timer.periodic(const Duration(milliseconds: 250), (_) => _read());
+  }
+
+  void _read() {
+    if (!mounted) return;
+    try {
+      final s = widget.viewer.audioState();
+      setState(() => _state = s);
+    } catch (_) {
+      _poll?.cancel();
+    }
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    // Closing the viewer stops the sound; pause first so it stops at once.
+    widget.viewer.audioPause().ignore();
+    super.dispose();
+  }
+
+  Future<void> _run(Future<void> Function() op) async {
+    try {
+      await op();
+      _read();
+    } catch (e) {
+      if (mounted) showMessage(context, describeError(e), error: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_error != null) return _Failed(_error!);
+    final info = _info;
+    if (info == null) return const Center(child: CircularProgressIndicator());
+    final st = _state;
+    final t = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final duration = info.durationMs;
+    final pos = (_dragging ?? (st?.positionMs ?? 0).toDouble()).clamp(
+      0.0,
+      math.max(duration, 1).toDouble(),
+    );
+    final playing = st?.playing ?? false;
+    final subtitle = [
+      info.artist,
+      info.album,
+    ].where((x) => x.isNotEmpty).join(' · ');
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: ListView(
+          key: const Key('viewer-audio'),
+          shrinkWrap: true,
+          padding: const EdgeInsets.all(24),
+          children: [
+            Icon(Icons.audiotrack, size: 96, color: scheme.primary),
+            const SizedBox(height: 16),
+            Text(
+              info.title.isNotEmpty ? info.title : widget.name,
+              textAlign: TextAlign.center,
+              style: t.titleLarge,
+            ),
+            if (subtitle.isNotEmpty)
+              Text(subtitle, textAlign: TextAlign.center, style: t.bodyMedium),
+            const SizedBox(height: 24),
+            Slider(
+              key: const Key('audio-position'),
+              value: pos,
+              max: math.max(duration, 1).toDouble(),
+              onChanged: duration > 0
+                  ? (v) => setState(() => _dragging = v)
+                  : null,
+              onChangeEnd: (v) {
+                setState(() => _dragging = null);
+                _run(() => widget.viewer.audioSeek(positionMs: v.round()));
+              },
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(_clock(pos.round()), style: t.bodySmall),
+                  Text(
+                    duration > 0 ? _clock(duration) : '',
+                    style: t.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton(
+                  tooltip: 'Back 10 seconds',
+                  iconSize: 32,
+                  onPressed: () => _run(
+                    () => widget.viewer.audioSeek(
+                      positionMs: math.max(0, pos.round() - 10000),
+                    ),
+                  ),
+                  icon: const Icon(Icons.replay_10),
+                ),
+                const SizedBox(width: 16),
+                IconButton.filled(
+                  key: const Key('audio-play'),
+                  tooltip: playing ? 'Pause' : 'Play',
+                  iconSize: 40,
+                  onPressed: () => _run(
+                    playing
+                        ? widget.viewer.audioPause
+                        : widget.viewer.audioPlay,
+                  ),
+                  icon: Icon(playing ? Icons.pause : Icons.play_arrow),
+                ),
+                const SizedBox(width: 16),
+                IconButton(
+                  tooltip: 'Forward 10 seconds',
+                  iconSize: 32,
+                  onPressed: () => _run(
+                    () => widget.viewer.audioSeek(
+                      positionMs: pos.round() + 10000,
+                    ),
+                  ),
+                  icon: const Icon(Icons.forward_10),
+                ),
+              ],
+            ),
+            if (st?.error != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                'Sound output problem: ${st!.error}',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: scheme.error),
+              ),
+            ],
+          ],
         ),
       ),
     );

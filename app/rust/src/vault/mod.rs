@@ -716,6 +716,30 @@ impl Vault {
         self.manifest.commit(vec![Record::Put { entry }])
     }
 
+    /// Replaces the contents of file `id` (an in-app edit). The new data is
+    /// encrypted into a fresh blob; the old one is deleted once unused.
+    pub fn replace_contents(&mut self, id: Id, data: &[u8]) -> CoreResult<()> {
+        let mut entry = self.manifest.get(&id).cloned().ok_or_else(gone)?;
+        if entry.kind != Kind::File {
+            return Err(CoreError::InvalidInput {
+                message: "that is not a file".into(),
+            });
+        }
+        let old = entry.data.take().map(|d| d.blob);
+        entry.size = data.len() as u64;
+        entry.modified = now();
+        entry.sha256 = None;
+        let mut pack = Pack::new();
+        self.add_file(entry, &mut &data[..], &mut pack)?;
+        self.flush_pack(&mut pack)?;
+        if let Some(b) = old {
+            if !self.manifest.blob_in_use(&b) {
+                self.blobs.remove(&b);
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn put_entry(&mut self, entry: Entry) -> CoreResult<()> {
         self.manifest.commit(vec![Record::Put { entry }])
     }

@@ -12,6 +12,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::{CoreError, CoreResult};
 
+pub mod audio;
 pub mod markdown;
 #[cfg(test)]
 mod tests;
@@ -29,6 +30,7 @@ pub enum Preview {
     Pdf,
     Text,
     Markdown,
+    Audio,
     None,
 }
 
@@ -124,6 +126,7 @@ pub fn preview_for_name(name: &str) -> Preview {
             Preview::Image
         }
         "pdf" => Preview::Pdf,
+        e if audio::AUDIO_EXTENSIONS.contains(&e) => Preview::Audio,
         "md" | "markdown" | "mdown" | "mkd" => Preview::Markdown,
         e if TEXT_EXTENSIONS.contains(&e) => Preview::Text,
         "" => match name.to_ascii_lowercase().as_str() {
@@ -157,7 +160,8 @@ pub fn describe(name: &str) -> String {
         "xls" | "xlsx" | "ods" => "Spreadsheet",
         "ppt" | "pptx" | "odp" => "Presentation",
         "zip" | "7z" | "rar" | "tar" | "gz" | "tgz" | "xz" | "bz2" | "zst" => "Archive",
-        "mp3" | "m4a" | "aac" | "flac" | "ogg" | "opus" | "wav" => "Audio",
+        "mp3" | "m4a" | "m4b" | "aac" | "flac" | "ogg" | "oga" | "opus" | "wav" | "aif"
+        | "aiff" => "Audio",
         "mp4" | "mkv" | "mov" | "webm" | "avi" => "Video",
         "apk" => "Android app",
         "exe" | "msi" => "Windows program",
@@ -193,6 +197,9 @@ pub fn sniff(name: &str, data: &[u8]) -> Preview {
     }) {
         return Preview::Image;
     }
+    if looks_like_audio(name, data) {
+        return Preview::Audio;
+    }
     let text = !data.is_empty() && looks_like_text(data);
     match preview_for_name(name) {
         p @ (Preview::Text | Preview::Markdown) if text => p,
@@ -200,6 +207,22 @@ pub fn sniff(name: &str, data: &[u8]) -> Preview {
         _ if text => Preview::Text,
         _ => Preview::None,
     }
+}
+
+fn looks_like_audio(name: &str, data: &[u8]) -> bool {
+    let at = |o: usize, m: &[u8]| data.get(o..o + m.len()) == Some(m);
+    if at(0, b"ID3") || at(0, b"fLaC") || at(0, b"OggS") || at(0, b"caff") {
+        return true;
+    }
+    if at(0, b"RIFF") && at(8, b"WAVE") || at(0, b"FORM") && (at(8, b"AIFF") || at(8, b"AIFC")) {
+        return true;
+    }
+    // MPEG audio or ADTS frame sync.
+    if data.len() > 2 && data[0] == 0xFF && data[1] & 0xE0 == 0xE0 {
+        return true;
+    }
+    // MP4 audio, or any MP4 named like audio.
+    at(4, b"ftyp") && (at(8, b"M4A ") || at(8, b"M4B ") || preview_for_name(name) == Preview::Audio)
 }
 
 fn looks_like_text(data: &[u8]) -> bool {
@@ -280,17 +303,87 @@ pub struct Picture {
 /// A whole decoded picture kept for re-scaling at different zoom levels.
 pub struct Decoded {
     image: RgbaImage,
+    /// Animated pictures: every frame after the first, each with how long
+    /// it shows. `delays[0]` belongs to `image`.
+    frames: Vec<RgbaImage>,
+    delays: Vec<u32>,
 }
 
 impl Drop for Decoded {
     fn drop(&mut self) {
-        let image = std::mem::take(&mut self.image);
-        let mut raw = image.into_raw();
-        raw.zeroize();
+        std::mem::take(&mut self.image).into_raw().zeroize();
+        for f in self.frames.drain(..) {
+            f.into_raw().zeroize();
+        }
     }
 }
 
+/// Animations bigger than this (all frames decoded) show their first frame.
+pub const MAX_ANIMATION_BYTES: usize = 256 * 1024 * 1024;
+pub const MAX_FRAMES: usize = 500;
+
+/// Decodes every frame of an animated GIF or WebP, or None when it is not
+/// animated or would take too much memory.
+fn decode_animation(data: &[u8]) -> Option<(Vec<RgbaImage>, Vec<u32>)> {
+    use image::AnimationDecoder;
+    let frames: Box<dyn Iterator<Item = image::ImageResult<image::Frame>>> =
+        match image::guess_format(data).ok()? {
+            image::ImageFormat::Gif => Box::new(
+                image::codecs::gif::GifDecoder::new(Cursor::new(data))
+                    .ok()?
+                    .into_frames(),
+            ),
+            image::ImageFormat::WebP => {
+                let d = image::codecs::webp::WebPDecoder::new(Cursor::new(data)).ok()?;
+                if !d.has_animation() {
+                    return None;
+                }
+                Box::new(d.into_frames())
+            }
+            _ => return None,
+        };
+    let mut images = Vec::new();
+    let mut delays = Vec::new();
+    let mut bytes = 0usize;
+    for f in frames {
+        let f = f.ok()?;
+        let (n, d) = f.delay().numer_denom_ms();
+        let ms = n.checked_div(d).unwrap_or(100);
+        // Browsers show very short delays as 100 ms; so do we.
+        delays.push(if ms < 20 { 100 } else { ms.min(60_000) });
+        let img = f.into_buffer();
+        bytes += img.as_raw().len();
+        images.push(img);
+        if bytes > MAX_ANIMATION_BYTES || images.len() > MAX_FRAMES {
+            for i in images {
+                i.into_raw().zeroize();
+            }
+            return None;
+        }
+    }
+    if images.len() < 2 {
+        for i in images {
+            i.into_raw().zeroize();
+        }
+        return None;
+    }
+    Some((images, delays))
+}
+
 impl Decoded {
+    pub fn delays(&self) -> &[u32] {
+        &self.delays
+    }
+
+    /// Frame `index` (0 = the first) scaled to fit.
+    pub fn render_frame(&self, index: u32, max_w: u32, max_h: u32) -> Option<Picture> {
+        let img = match index {
+            0 => &self.image,
+            i => self.frames.get(i as usize - 1)?,
+        };
+        Some(scale(img, max_w, max_h))
+    }
+
     pub fn width(&self) -> u32 {
         self.image.width()
     }
@@ -318,6 +411,14 @@ pub fn decode_image(data: &[u8]) -> CoreResult<Decoded> {
     limits.max_image_width = Some(40_000);
     limits.max_image_height = Some(40_000);
     reader.limits(limits);
+    if let Some((mut frames, delays)) = decode_animation(data) {
+        let first = frames.remove(0);
+        return Ok(Decoded {
+            image: first,
+            frames,
+            delays,
+        });
+    }
     let mut decoder = reader.into_decoder().map_err(|_| view_error("picture"))?;
     let orientation = decoder.orientation().ok();
     let mut img = DynamicImage::from_decoder(decoder).map_err(|_| view_error("picture"))?;
@@ -332,7 +433,11 @@ pub fn decode_image(data: &[u8]) -> CoreResult<Decoded> {
             converted
         }
     };
-    Ok(Decoded { image: rgba })
+    Ok(Decoded {
+        image: rgba,
+        frames: Vec::new(),
+        delays: vec![0],
+    })
 }
 
 fn wipe_dynamic(img: DynamicImage) {
@@ -368,18 +473,21 @@ pub fn fit(w: u32, h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
 impl Decoded {
     /// The picture scaled down to fit `max_w`×`max_h`.
     pub fn render(&self, max_w: u32, max_h: u32) -> Picture {
-        let (w, h) = fit(self.width(), self.height(), max_w, max_h);
-        let rgba = if (w, h) == (self.width(), self.height()) {
-            self.image.as_raw().clone()
-        } else {
-            image::imageops::resize(&self.image, w, h, image::imageops::FilterType::Triangle)
-                .into_raw()
-        };
-        Picture {
-            width: w,
-            height: h,
-            rgba,
-        }
+        scale(&self.image, max_w, max_h)
+    }
+}
+
+fn scale(img: &RgbaImage, max_w: u32, max_h: u32) -> Picture {
+    let (w, h) = fit(img.width(), img.height(), max_w, max_h);
+    let rgba = if (w, h) == (img.width(), img.height()) {
+        img.as_raw().clone()
+    } else {
+        image::imageops::resize(img, w, h, image::imageops::FilterType::Triangle).into_raw()
+    };
+    Picture {
+        width: w,
+        height: h,
+        rgba,
     }
 }
 
@@ -463,7 +571,10 @@ pub enum Content {
     Text {
         text: Zeroizing<String>,
         truncated: bool,
+        /// Whole and valid UTF-8, so saving an edit changes nothing else.
+        editable: bool,
     },
+    Audio(audio::Audio),
 }
 
 impl Content {
@@ -473,9 +584,22 @@ impl Content {
         match sniff(name, &data) {
             Preview::Image => Ok((Preview::Image, Content::Image(decode_image(&data)?))),
             Preview::Pdf => Ok((Preview::Pdf, Content::Pdf(PdfDoc::open(data)?))),
+            Preview::Audio => Ok((
+                Preview::Audio,
+                Content::Audio(audio::Audio::open(name, data)?),
+            )),
             p @ (Preview::Text | Preview::Markdown) => {
                 let (text, truncated) = decode_text(&data);
-                Ok((p, Content::Text { text, truncated }))
+                let editable =
+                    !truncated && utf16_bom(&data).is_none() && std::str::from_utf8(&data).is_ok();
+                Ok((
+                    p,
+                    Content::Text {
+                        text,
+                        truncated,
+                        editable,
+                    },
+                ))
             }
             Preview::None => Err(CoreError::InvalidInput {
                 message: "Atropos cannot show this kind of file. You can export it to open it \

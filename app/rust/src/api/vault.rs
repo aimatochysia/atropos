@@ -307,7 +307,7 @@ fn parse_device(id: &str) -> CoreResult<Vec<u8>> {
     })
 }
 
-fn wrong_secret(e: CoreError) -> CoreError {
+pub(crate) fn wrong_secret(e: CoreError) -> CoreError {
     match e {
         CoreError::DecryptFailed => CoreError::InvalidInput {
             message: "wrong password or recovery phrase".into(),

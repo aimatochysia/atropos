@@ -789,3 +789,193 @@ mod tests {
         assert_eq!(names, vec!["photos", "photos (2)"]);
     }
 }
+
+/// One item of an opened package, for browsing.
+#[derive(Clone, Debug)]
+pub struct PackageItem {
+    pub path: Vec<String>,
+    pub kind: Kind,
+    pub size: u64,
+    pub modified: i64,
+    pub executable: bool,
+}
+
+/// A package opened for browsing in place: the file list is decrypted once,
+/// and each file is decrypted chunk by chunk straight from the package
+/// when it is viewed. Nothing is written anywhere.
+pub struct PackageReader {
+    file: fs::File,
+    key: crate::crypto::aead::AeadKey,
+    prefix: [u8; PREFIX_LEN],
+    aad: Vec<u8>,
+    /// Where the encrypted stream starts in the file.
+    start: u64,
+    /// Length of the encrypted stream.
+    sealed: u64,
+    items: Vec<PackageItem>,
+    /// Plaintext offset of each item's bytes (0 for folders and links).
+    offsets: Vec<u64>,
+}
+
+impl PackageReader {
+    /// Opens `path` for browsing. Checks the final chunk too, so a cut-off
+    /// package is caught here rather than on some later file.
+    pub fn open(path: &Path, key: PackageKey) -> CoreResult<Self> {
+        let mut file = fs::File::open(path)?;
+        let (header, aad) = read_header(&mut BufReader::new(&mut file))?;
+        let k = stream_key(&header, &key)?;
+        let prefix: [u8; PREFIX_LEN] = header
+            .prefix
+            .as_slice()
+            .try_into()
+            .map_err(|_| CoreError::DecryptFailed)?;
+        let start = aad.len() as u64;
+        let total = file.metadata()?.len();
+        let sealed = total.checked_sub(start).ok_or(CoreError::DecryptFailed)?;
+        let mut r = PackageReader {
+            file,
+            key: crate::crypto::aead::AeadKey::new(&k)?,
+            prefix,
+            aad,
+            start,
+            sealed,
+            items: Vec::new(),
+            offsets: Vec::new(),
+        };
+        // Authenticates the last chunk, and with it the stream's length.
+        let chunks = crate::crypto::stream::chunk_count(sealed);
+        r.chunk(chunks - 1)?;
+        let mut len = Zeroizing::new(Vec::new());
+        r.read_range(0, 8, &mut *len)?;
+        let len = u64::from_be_bytes(len[..].try_into().map_err(|_| CoreError::DecryptFailed)?);
+        if len > MAX_INDEX {
+            return Err(CoreError::DecryptFailed);
+        }
+        let mut ij = Zeroizing::new(Vec::new());
+        r.read_range(8, len, &mut *ij)?;
+        let index: Vec<Item> = serde_json::from_slice(&ij).map_err(|_| CoreError::DecryptFailed)?;
+        validate(&index)?;
+        let mut off = 8 + len;
+        for item in index {
+            r.offsets
+                .push(if item.kind == Kind::File { off } else { 0 });
+            if item.kind == Kind::File {
+                off = off.checked_add(item.size).ok_or(CoreError::DecryptFailed)?;
+            }
+            r.items.push(PackageItem {
+                path: item.path,
+                kind: item.kind,
+                size: item.size,
+                modified: item.modified,
+                executable: item.executable,
+            });
+        }
+        // The files must fit inside the plaintext.
+        let plain_len = sealed - chunks * crate::crypto::aead::TAG_LEN as u64;
+        if off > plain_len {
+            return Err(CoreError::DecryptFailed);
+        }
+        Ok(r)
+    }
+
+    pub fn items(&self) -> &[PackageItem] {
+        &self.items
+    }
+
+    fn chunk(&mut self, index: u64) -> CoreResult<Zeroizing<Vec<u8>>> {
+        use std::io::{Seek, SeekFrom};
+        let sealed_chunk = (crate::crypto::stream::CHUNK_LEN + crate::crypto::aead::TAG_LEN) as u64;
+        let chunks = crate::crypto::stream::chunk_count(self.sealed);
+        if index >= chunks {
+            return Err(CoreError::DecryptFailed);
+        }
+        let at = index * sealed_chunk;
+        let size = sealed_chunk.min(self.sealed - at) as usize;
+        let mut buf = vec![0u8; size];
+        self.file.seek(SeekFrom::Start(self.start + at))?;
+        self.file.read_exact(&mut buf)?;
+        crate::crypto::stream::decrypt_chunk(
+            &self.key,
+            &self.prefix,
+            &self.aad,
+            index,
+            index + 1 == chunks,
+            &buf,
+        )
+    }
+
+    /// Decrypts plaintext bytes `from..from + len` into `out`.
+    fn read_range(&mut self, from: u64, len: u64, out: &mut dyn Write) -> CoreResult<()> {
+        let chunk_len = crate::crypto::stream::CHUNK_LEN as u64;
+        let mut pos = from;
+        let end = from.checked_add(len).ok_or(CoreError::DecryptFailed)?;
+        while pos < end {
+            let plain = self.chunk(pos / chunk_len)?;
+            let inner = (pos % chunk_len) as usize;
+            let take = ((end - pos) as usize).min(plain.len().saturating_sub(inner));
+            if take == 0 {
+                return Err(CoreError::DecryptFailed);
+            }
+            out.write_all(&plain[inner..inner + take])?;
+            pos += take as u64;
+        }
+        Ok(())
+    }
+
+    /// Decrypts item `index` (a file) into `out`.
+    pub fn read_file(&mut self, index: usize, out: &mut dyn Write) -> CoreResult<()> {
+        let item = self.items.get(index).ok_or(CoreError::InvalidInput {
+            message: "that item is not in the package".into(),
+        })?;
+        if item.kind != Kind::File {
+            return Err(CoreError::InvalidInput {
+                message: "only files can be opened".into(),
+            });
+        }
+        let (from, size) = (self.offsets[index], item.size);
+        self.read_range(from, size, out)
+    }
+}
+
+#[cfg(test)]
+mod reader_tests {
+    use super::*;
+
+    const PW: &[u8] = b"violet-harbor-tundra-9";
+
+    #[test]
+    fn browse_a_package_without_extracting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path().join("photos");
+        fs::create_dir_all(d.join("2026")).unwrap();
+        let big: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+        fs::write(d.join("2026/a.bin"), &big).unwrap();
+        fs::write(d.join("note.txt"), "secret note").unwrap();
+        let pkg = tmp.path().join("p.atropos");
+        create(&pkg, SealTo::Passphrase(PW), &[d], None, &mut |_| {}).unwrap();
+
+        let mut r = PackageReader::open(&pkg, PackageKey::Passphrase(PW)).unwrap();
+        let find = |r: &PackageReader, name: &str| {
+            r.items()
+                .iter()
+                .position(|i| i.path.last().map(String::as_str) == Some(name))
+                .unwrap()
+        };
+        let a = find(&r, "a.bin");
+        let n = find(&r, "note.txt");
+        assert_eq!(r.items()[a].path, ["photos", "2026", "a.bin"]);
+        let mut out = Vec::new();
+        r.read_file(a, &mut out).unwrap();
+        assert_eq!(out, big);
+        out.clear();
+        r.read_file(n, &mut out).unwrap();
+        assert_eq!(out, b"secret note");
+        assert!(r.read_file(find(&r, "2026"), &mut out).is_err());
+
+        assert!(PackageReader::open(&pkg, PackageKey::Passphrase(b"wrong-pass-0000")).is_err());
+        let bytes = fs::read(&pkg).unwrap();
+        let cut = tmp.path().join("cut.atropos");
+        fs::write(&cut, &bytes[..bytes.len() - 100]).unwrap();
+        assert!(PackageReader::open(&cut, PackageKey::Passphrase(PW)).is_err());
+    }
+}

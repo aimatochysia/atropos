@@ -7,6 +7,7 @@ import '../error.dart';
 import '../frb_generated.dart';
 import 'card.dart';
 import 'maintenance.dart';
+import 'package.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
@@ -139,6 +140,9 @@ abstract class VaultSession implements RustOpaqueInterface {
     required FutureOr<Uint8List> Function(Uint8List) transmit,
   });
 
+  /// Opens a package locked to this vault for browsing.
+  Future<PackageSession> browsePackage({required String path});
+
   Future<List<CardSlotInfo>> cards();
 
   Future<void> changePassword({required SecretInput newPassword});
@@ -233,6 +237,9 @@ abstract class VaultSession implements RustOpaqueInterface {
   /// Fixes what the last check found. With `remove_broken`, damaged and
   /// missing files are taken off the list.
   Future<RepairInfo> repair({required bool removeBroken});
+
+  /// Saves edited text as the new contents of file `id` (UTF-8).
+  Future<void> saveText({required String id, required String text});
 
   /// Seals items into one `.atropos` file. With a passphrase anyone who
   /// knows it can open the package; without, only this vault can.

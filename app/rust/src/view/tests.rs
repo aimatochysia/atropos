@@ -219,3 +219,83 @@ fn viewer_through_a_vault_and_wiped_on_lock() {
     assert!(doc.pdf_pages().is_err());
     assert!(s.viewers.lock().unwrap().is_empty());
 }
+
+fn gif(frames: u8) -> Vec<u8> {
+    use image::codecs::gif::{GifEncoder, Repeat};
+    let mut out = Vec::new();
+    {
+        let mut enc = GifEncoder::new(&mut out);
+        enc.set_repeat(Repeat::Infinite).unwrap();
+        for i in 0..frames {
+            let img = RgbaImage::from_pixel(8, 4, image::Rgba([i * 80, 0, 0, 255]));
+            let frame = image::Frame::from_parts(
+                img,
+                0,
+                0,
+                image::Delay::from_numer_denom_ms(if i == 0 { 10 } else { 250 }, 1),
+            );
+            enc.encode_frame(frame).unwrap();
+        }
+    }
+    out
+}
+
+#[test]
+fn animated_gifs_keep_every_frame() {
+    let d = decode_image(&gif(3)).unwrap();
+    assert_eq!(d.delays().len(), 3);
+    assert_eq!(
+        d.delays(),
+        &[100, 250, 250],
+        "too-short delays become 100 ms"
+    );
+    let f = d.render_frame(2, 100, 100).unwrap();
+    assert_eq!((f.width, f.height), (8, 4));
+    assert_eq!(&f.rgba[..4], &[160, 0, 0, 255]);
+    assert!(d.render_frame(3, 10, 10).is_none());
+
+    let still = decode_image(&gif(1)).unwrap();
+    assert_eq!(still.delays().len(), 1);
+    assert_eq!(decode_image(&png(4, 4)).unwrap().delays(), &[0]);
+}
+
+fn wav(rate: u32, seconds: u32) -> Vec<u8> {
+    let frames = rate * seconds;
+    let data_len = frames * 4;
+    let mut w = Vec::new();
+    w.extend_from_slice(b"RIFF");
+    w.extend_from_slice(&(36 + data_len).to_le_bytes());
+    w.extend_from_slice(b"WAVEfmt ");
+    w.extend_from_slice(&16u32.to_le_bytes());
+    w.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    w.extend_from_slice(&2u16.to_le_bytes()); // stereo
+    w.extend_from_slice(&rate.to_le_bytes());
+    w.extend_from_slice(&(rate * 4).to_le_bytes());
+    w.extend_from_slice(&4u16.to_le_bytes());
+    w.extend_from_slice(&16u16.to_le_bytes());
+    w.extend_from_slice(b"data");
+    w.extend_from_slice(&data_len.to_le_bytes());
+    for i in 0..frames {
+        let v = ((i as f32 * 440.0 * std::f32::consts::TAU / rate as f32).sin() * 8000.0) as i16;
+        w.extend_from_slice(&v.to_le_bytes());
+        w.extend_from_slice(&v.to_le_bytes());
+    }
+    w
+}
+
+#[test]
+fn audio_files_are_recognised_and_read_in_memory() {
+    let data = wav(8000, 2);
+    // Recognised from its bytes even with the wrong name.
+    assert_eq!(sniff("notes.bin", &data), Preview::Audio);
+    assert_eq!(preview_for_name("song.flac"), Preview::Audio);
+    let (kind, content) = Content::open("a.wav", Zeroizing::new(data)).unwrap();
+    assert_eq!(kind, Preview::Audio);
+    let Content::Audio(a) = content else { panic!() };
+    assert_eq!(a.info().duration_ms, 2000);
+    assert_eq!(a.info().sample_rate, 8000);
+    assert_eq!(a.info().channels, 2);
+    // Not played yet: nothing touched the sound device.
+    assert!(!a.state().playing);
+    assert!(Content::open("b.mp3", Zeroizing::new(b"ID3 junk".to_vec())).is_err());
+}
