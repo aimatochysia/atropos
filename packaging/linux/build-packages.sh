@@ -47,7 +47,7 @@ Section: devel
 Priority: optional
 Architecture: amd64
 Installed-Size: $size
-Depends: libgtk-3-0 | libgtk-3-0t64, libc6 (>= 2.35), libpcsclite1
+Depends: libgtk-3-0 | libgtk-3-0t64, libc6 (>= 2.35), libpcsclite1, libasound2 | libasound2t64
 Recommends: pcscd
 Maintainer: Atropos <noreply@github.com>
 Homepage: https://github.com/aimatochysia/atropos

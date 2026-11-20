@@ -4,7 +4,7 @@ use std::time::Instant;
 use flutter_rust_bridge::frb;
 
 use super::secure_input::SecretInput;
-use super::vault::{ProgressInfo, VaultSession};
+use super::vault::{ProgressInfo, RekeyDone, RekeyEvent, VaultSession};
 use crate::crypto::password::Argon2Cost;
 use crate::error::{CoreError, CoreResult};
 use crate::frb_generated::StreamSink;
@@ -166,5 +166,29 @@ impl VaultSession {
         let took = crate::crypto::password::time_cost(cost)?;
         self.with(|v| v.set_password_cost(&pw, cost))?;
         Ok(took.as_millis().min(u32::MAX as u128) as u32)
+    }
+}
+
+impl VaultSession {
+    /// Re-encrypts the whole vault under new keys and a new recovery
+    /// phrase. Needs the password, which stays the same. Fingerprint and
+    /// card unlock have to be set up again afterwards.
+    pub fn rekey(&self, password: &SecretInput, sink: StreamSink<RekeyEvent>) -> CoreResult<()> {
+        let pw = password.bytes();
+        let mut last = Instant::now() - std::time::Duration::from_secs(1);
+        let (vault, phrase) = self.take_for_rekey(|v| {
+            let cost = v.password_cost().unwrap_or(Argon2Cost::DEFAULT);
+            v.rekey(&pw, cost, &mut |p: &Progress| {
+                if p.files_done == p.files_total || last.elapsed().as_millis() >= 100 {
+                    last = Instant::now();
+                    let _ = sink.add(RekeyEvent::Progress(super::vault::progress_info(p)));
+                }
+            })
+        })?;
+        let _ = sink.add(RekeyEvent::Done(RekeyDone {
+            session: super::vault::new_session(vault),
+            recovery_phrase: phrase.to_string(),
+        }));
+        Ok(())
     }
 }

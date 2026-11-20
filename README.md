@@ -35,6 +35,15 @@ validated module.
   missing files, leftovers from interrupted writes and unreadable parts of the
   file list (which no longer stop the vault from opening), and fixes them.
   Password protection strength can be set to 64 MB, 256 MB or 1 GB.
+- v0.5.1: "Re-key vault" re-encrypts everything under all-new keys and a new
+  recovery phrase (password unchanged), for when a key or phrase may have
+  leaked. Earlier copies still open with the old credentials.
+- v0.6: everything stays in the app. Packages open for browsing without
+  extracting (each file is decrypted from the package into memory when
+  viewed); audio plays in the app (MP3, AAC/M4A, FLAC, Ogg Vorbis, WAV, AIFF:
+  Symphonia decodes, cpal plays, nothing goes through another app); GIFs and
+  animated WebP play; text can be selected, copied (the clipboard is cleared
+  after 60 seconds or on lock) and edited in place. Android 8.0 or newer.
 
 ## Building
 

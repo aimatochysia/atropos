@@ -14,6 +14,7 @@ pub mod header;
 pub mod manifest;
 pub mod package;
 pub mod recovery;
+pub mod rekey;
 
 use std::fs;
 use std::io::{Read, Write};
@@ -72,6 +73,7 @@ pub fn is_vault(path: &Path) -> bool {
 
 /// Reads the header of a locked vault (for showing its name and slots).
 pub fn read_header(path: &Path) -> CoreResult<HeaderFile> {
+    rekey::recover_interrupted(path);
     let bytes = fs::read(path.join(HEADER_FILE)).map_err(|_| CoreError::InvalidInput {
         message: format!("no Atropos vault at {}", path.display()),
     })?;
@@ -712,6 +714,30 @@ impl Vault {
             len,
         });
         self.manifest.commit(vec![Record::Put { entry }])
+    }
+
+    /// Replaces the contents of file `id` (an in-app edit). The new data is
+    /// encrypted into a fresh blob; the old one is deleted once unused.
+    pub fn replace_contents(&mut self, id: Id, data: &[u8]) -> CoreResult<()> {
+        let mut entry = self.manifest.get(&id).cloned().ok_or_else(gone)?;
+        if entry.kind != Kind::File {
+            return Err(CoreError::InvalidInput {
+                message: "that is not a file".into(),
+            });
+        }
+        let old = entry.data.take().map(|d| d.blob);
+        entry.size = data.len() as u64;
+        entry.modified = now();
+        entry.sha256 = None;
+        let mut pack = Pack::new();
+        self.add_file(entry, &mut &data[..], &mut pack)?;
+        self.flush_pack(&mut pack)?;
+        if let Some(b) = old {
+            if !self.manifest.blob_in_use(&b) {
+                self.blobs.remove(&b);
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn put_entry(&mut self, entry: Entry) -> CoreResult<()> {

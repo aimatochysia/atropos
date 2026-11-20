@@ -7,6 +7,7 @@ import '../core/format.dart';
 import '../src/rust/api/maintenance.dart';
 import '../src/rust/api/secure_input.dart';
 import '../src/rust/api/vault.dart';
+import 'recovery_page.dart';
 import 'secret_dialog.dart';
 import 'task_progress.dart';
 import 'widgets/feedback.dart';
@@ -451,6 +452,128 @@ class DamagedBanner extends StatelessWidget {
           ),
           child: const Text('Check and repair'),
         ),
+      ],
+    );
+  }
+}
+
+/// Re-encrypts the vault under all-new keys. Returns the new session (the
+/// old one is locked), or null when cancelled or failed.
+Future<VaultSession?> rekeyFlow(BuildContext context, VaultSession s) async {
+  final ok = await confirm(
+    context,
+    title: 'Re-key this vault?',
+    message:
+        'Atropos makes all-new keys and a new recovery phrase, and encrypts '
+        'every file again. Use it if you think a key or the recovery phrase '
+        'leaked.\n\n'
+        '• The password stays the same.\n'
+        '• The old recovery phrase stops working for this copy. Have paper '
+        'ready for the new one.\n'
+        '• Fingerprint and security card unlock must be set up again.\n'
+        '• Copies made before (backups, cloud history, git) still open with '
+        'the old password or phrase.\n'
+        '• It takes about as long as importing everything again, and needs '
+        'that much free space while it runs.',
+    action: 'Continue',
+    destructive: true,
+  );
+  if (!ok || !context.mounted) return null;
+  final pw = await askSecret(
+    context,
+    title: 'Enter the password',
+    label: 'Password',
+    action: 'Re-key',
+  );
+  if (pw == null || !context.mounted) return null;
+  final done = await showDialog<RekeyDone>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => _RekeyDialog(session: s, password: pw),
+  );
+  pw.clear();
+  if (done == null) return null;
+  if (context.mounted) {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => RecoveryPhrasePage(
+          phrase: done.recoveryPhrase,
+          onDone: (ctx) => Navigator.of(ctx).pop(),
+        ),
+      ),
+    );
+  }
+  return done.session;
+}
+
+class _RekeyDialog extends StatefulWidget {
+  const _RekeyDialog({required this.session, required this.password});
+  final VaultSession session;
+  final SecretInput password;
+
+  @override
+  State<_RekeyDialog> createState() => _RekeyDialogState();
+}
+
+class _RekeyDialogState extends State<_RekeyDialog> {
+  StreamSubscription<RekeyEvent>? _sub;
+  ProgressInfo? _p;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _sub = widget.session.rekey(password: widget.password).listen((e) {
+      if (!mounted) return;
+      final done = e.done();
+      if (done != null) {
+        Navigator.of(context).pop(done);
+        return;
+      }
+      setState(() => _p = e.progress());
+    }, onError: (Object e) => setState(() => _error = describeError(e)));
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = _p;
+    return AlertDialog(
+      title: const Text('Re-keying'),
+      content: _error != null
+          ? Text(_error!)
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                LinearProgressIndicator(
+                  value: p == null || p.bytesTotal == BigInt.zero
+                      ? null
+                      : p.bytesDone.toDouble() / p.bytesTotal.toDouble(),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  p == null
+                      ? 'Making new keys…'
+                      : p.filesDone == p.filesTotal
+                      ? 'Verifying and switching over…'
+                      : '${p.filesDone} of ${plural(p.filesTotal, 'file')}',
+                ),
+                const SizedBox(height: 8),
+                const Text('Keep Atropos open until this finishes.'),
+              ],
+            ),
+      actions: [
+        if (_error != null)
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
       ],
     );
   }

@@ -1,6 +1,6 @@
 [package]
 name = "atropos_core"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "Core encryption, vault and update logic for the Atropos app"
 license = "MIT"
@@ -32,10 +32,18 @@ zxcvbn = "3"
 hayro = "0.9"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
 pulldown-cmark = { version = "0.13", default-features = false }
+# In-app audio: decoded in memory, played straight to the sound device.
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "aac", "isomp4", "flac", "vorbis", "ogg", "wav", "pcm", "adpcm"] }
+cpal = "0.18"
 
 # PC/SC smartcard readers on desktops (Android reaches cards over NFC instead).
 [target.'cfg(not(target_os = "android"))'.dependencies]
 pcsc = "2"
+
+# Audio on Android needs the app context, handed over once from Kotlin.
+[target.'cfg(target_os = "android")'.dependencies]
+ndk-context = "0.1"
+jni-sys = "0.3"
 
 [dev-dependencies]
 minisign = "0.10.0"

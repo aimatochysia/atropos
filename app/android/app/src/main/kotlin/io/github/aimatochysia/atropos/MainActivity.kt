@@ -29,7 +29,16 @@ class MainActivity : FlutterFragmentActivity() {
         // recordings or the recent-apps preview.
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         super.onCreate(savedInstanceState)
+        // The Rust core plays audio itself and needs the app context for it.
+        try {
+            System.loadLibrary("atropos_core")
+            initNative(applicationContext)
+        } catch (e: UnsatisfiedLinkError) {
+            // Audio will report that it cannot start; everything else works.
+        }
     }
+
+    private external fun initNative(context: android.content.Context)
 
     private var pendingPick: Result? = null
     private var nfcCards: NfcCards? = null

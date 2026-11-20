@@ -7,6 +7,7 @@ import '../core/format.dart';
 import '../src/rust/api/vault.dart' as core;
 import '../state/app_controller.dart';
 import 'create_vault_page.dart';
+import 'package_browser_page.dart';
 import 'package_flows.dart';
 import 'settings_page.dart';
 import 'storage_access.dart';
@@ -130,11 +131,23 @@ class HomePage extends StatelessWidget {
                       ),
                       const Divider(height: 1),
                       ListTile(
-                        key: const Key('extract-package'),
-                        leading: const Icon(Icons.unarchive_outlined),
+                        key: const Key('browse-package'),
+                        leading: const Icon(Icons.inventory_2_outlined),
                         title: const Text('Open a package'),
                         subtitle: const Text(
-                          'Decrypt a passphrase-locked package into a folder.',
+                          'Look at its files inside Atropos. Nothing is '
+                          'written to disk.',
+                        ),
+                        onTap: () => browsePackageFlow(context),
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
+                        key: const Key('extract-package'),
+                        leading: const Icon(Icons.unarchive_outlined),
+                        title: const Text('Extract a package'),
+                        subtitle: const Text(
+                          'Decrypt a passphrase-locked package into a '
+                          'folder, unencrypted.',
                         ),
                         onTap: () => extractPackageToDisk(context),
                       ),

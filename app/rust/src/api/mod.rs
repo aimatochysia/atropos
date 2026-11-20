@@ -1,6 +1,7 @@
 pub mod app;
 pub mod card;
 pub mod maintenance;
+pub mod package;
 pub mod secure_input;
 pub mod selftest;
 pub mod settings;

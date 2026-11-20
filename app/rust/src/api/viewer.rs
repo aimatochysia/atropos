@@ -15,6 +15,7 @@ pub enum PreviewKind {
     Pdf,
     Text,
     Markdown,
+    Audio,
     None,
 }
 
@@ -25,6 +26,7 @@ impl From<Preview> for PreviewKind {
             Preview::Pdf => PreviewKind::Pdf,
             Preview::Text => PreviewKind::Text,
             Preview::Markdown => PreviewKind::Markdown,
+            Preview::Audio => PreviewKind::Audio,
             Preview::None => PreviewKind::None,
         }
     }
@@ -68,6 +70,8 @@ pub struct TextView {
     pub lines: Vec<String>,
     /// The file was longer than the viewer shows.
     pub truncated: bool,
+    /// [FileViewer::editable_text] will work.
+    pub editable: bool,
 }
 
 pub use markdown::BlockKind as MdBlockKind;
@@ -83,6 +87,23 @@ pub enum _MdBlockKind {
     Code,
     Rule,
     TableRow,
+}
+
+pub struct AudioInfo {
+    pub duration_ms: u32,
+    pub sample_rate: u32,
+    pub channels: u32,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+}
+
+pub struct AudioState {
+    pub position_ms: u32,
+    pub playing: bool,
+    pub ended: bool,
+    /// Set when the sound device failed.
+    pub error: Option<String>,
 }
 
 pub struct MdSpan {
@@ -118,6 +139,13 @@ fn closed() -> CoreError {
 }
 
 impl VaultSession {
+    /// Saves edited text as the new contents of file `id` (UTF-8).
+    pub fn save_text(&self, id: String, text: String) -> CoreResult<()> {
+        let id = parse_id(&id)?;
+        let text = Zeroizing::new(text);
+        self.with(|v| v.replace_contents(id, text.as_bytes()))
+    }
+
     /// Decrypts file `id` into memory for the viewer.
     pub fn open_viewer(&self, id: String) -> CoreResult<FileViewer> {
         let id = parse_id(&id)?;
@@ -140,14 +168,29 @@ impl VaultSession {
             v.read_file(id, &mut *buf)?;
             Ok((entry.name, buf))
         })?;
+        FileViewer::new(name, data, &self.viewers, || self.is_locked())
+    }
+}
+
+pub(crate) type Viewers = Arc<Mutex<Vec<std::sync::Weak<view::Slot>>>>;
+
+impl FileViewer {
+    /// Decodes `data` and registers the viewer in `viewers`, which wipes it
+    /// when its vault or package closes.
+    pub(crate) fn new(
+        name: String,
+        data: Zeroizing<Vec<u8>>,
+        viewers: &Viewers,
+        closed_now: impl Fn() -> bool,
+    ) -> CoreResult<FileViewer> {
         let (kind, content) = Content::open(&name, data)?;
         let content = Arc::new(Mutex::new(Some(content)));
-        let mut viewers = self.viewers.lock().unwrap_or_else(|e| e.into_inner());
-        viewers.retain(|w| w.strong_count() > 0);
-        viewers.push(Arc::downgrade(&content));
-        drop(viewers);
-        // The vault may have locked while the file was being decoded.
-        if self.is_locked() {
+        let mut list = viewers.lock().unwrap_or_else(|e| e.into_inner());
+        list.retain(|w| w.strong_count() > 0);
+        list.push(Arc::downgrade(&content));
+        drop(list);
+        // It may have closed while the file was being decoded.
+        if closed_now() {
             *content.lock().unwrap_or_else(|e| e.into_inner()) = None;
             return Err(closed());
         }
@@ -194,6 +237,31 @@ impl FileViewer {
         })
     }
 
+    /// How long each frame shows, in milliseconds: one entry per frame, so
+    /// a still picture gives one.
+    pub fn frame_delays(&self) -> CoreResult<Vec<u32>> {
+        self.with(|c| match c {
+            Content::Image(d) => Ok(d.delays().to_vec()),
+            _ => Err(wrong_kind()),
+        })
+    }
+
+    /// Frame `index` of an animation scaled to fit.
+    pub fn render_frame(
+        &self,
+        index: u32,
+        max_width: u32,
+        max_height: u32,
+    ) -> CoreResult<RenderedPicture> {
+        self.with(|c| match c {
+            Content::Image(d) => d
+                .render_frame(index, max_width, max_height)
+                .map(Into::into)
+                .ok_or_else(wrong_kind),
+            _ => Err(wrong_kind()),
+        })
+    }
+
     /// Each page's size in points (1/72 inch).
     pub fn pdf_pages(&self) -> CoreResult<Vec<PictureSize>> {
         self.with(|c| match c {
@@ -225,10 +293,33 @@ impl FileViewer {
     pub fn text(&self) -> CoreResult<TextView> {
         self.with(|c| match c {
             Content::Text {
-                text, truncated, ..
+                text,
+                truncated,
+                editable,
             } => Ok(TextView {
                 lines: view::lines(text),
                 truncated: *truncated,
+                editable: *editable,
+            }),
+            _ => Err(wrong_kind()),
+        })
+    }
+
+    /// The whole text exactly as stored, for editing. Refused when the file
+    /// is too long for the viewer, so an edit can never cut it short.
+    pub fn editable_text(&self) -> CoreResult<String> {
+        self.with(|c| match c {
+            Content::Text {
+                text,
+                editable: true,
+                ..
+            } => Ok(text.to_string()),
+            Content::Text { truncated, .. } => Err(CoreError::InvalidInput {
+                message: if *truncated {
+                    "this file is too long to edit in Atropos".into()
+                } else {
+                    "this file is not plain UTF-8 text, so Atropos does not edit it".into()
+                },
             }),
             _ => Err(wrong_kind()),
         })
@@ -257,6 +348,65 @@ impl FileViewer {
                         .collect(),
                 })
                 .collect()),
+            _ => Err(wrong_kind()),
+        })
+    }
+
+    pub fn audio_info(&self) -> CoreResult<AudioInfo> {
+        self.with(|c| match c {
+            Content::Audio(a) => {
+                let i = a.info();
+                Ok(AudioInfo {
+                    duration_ms: i.duration_ms.min(u32::MAX as u64) as u32,
+                    sample_rate: i.sample_rate,
+                    channels: i.channels,
+                    title: i.title.clone(),
+                    artist: i.artist.clone(),
+                    album: i.album.clone(),
+                })
+            }
+            _ => Err(wrong_kind()),
+        })
+    }
+
+    /// Starts or resumes playback; from the start again once it ended.
+    pub fn audio_play(&self) -> CoreResult<()> {
+        self.with(|c| match c {
+            Content::Audio(a) => a.play(),
+            _ => Err(wrong_kind()),
+        })
+    }
+
+    pub fn audio_pause(&self) -> CoreResult<()> {
+        self.with(|c| match c {
+            Content::Audio(a) => {
+                a.pause();
+                Ok(())
+            }
+            _ => Err(wrong_kind()),
+        })
+    }
+
+    pub fn audio_seek(&self, position_ms: u32) -> CoreResult<()> {
+        self.with(|c| match c {
+            Content::Audio(a) => a.seek(position_ms as u64),
+            _ => Err(wrong_kind()),
+        })
+    }
+
+    /// Where playback is; cheap enough to ask a few times a second.
+    #[frb(sync)]
+    pub fn audio_state(&self) -> CoreResult<AudioState> {
+        self.with(|c| match c {
+            Content::Audio(a) => {
+                let s = a.state();
+                Ok(AudioState {
+                    position_ms: s.position_ms.min(u32::MAX as u64) as u32,
+                    playing: s.playing,
+                    ended: s.ended,
+                    error: s.error,
+                })
+            }
             _ => Err(wrong_kind()),
         })
     }

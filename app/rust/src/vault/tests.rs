@@ -492,3 +492,91 @@ fn password_cost_can_change_with_the_password() {
     let v = Vault::unlock(&vpath, &Unlock::Password(PW)).unwrap();
     assert_eq!(v.password_cost(), Some(light));
 }
+
+#[test]
+fn rekey_replaces_every_key_and_keeps_every_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    tree(&src);
+    let vpath = tmp.path().join("v");
+    let (mut v, old_phrase) = Vault::create(&vpath, PW, fast()).unwrap();
+    v.import(&[src.join("proj")], None, false, &mut |_| {})
+        .unwrap();
+    let old_id = v.vault_id().to_vec();
+    let old_blobs = all_files(&vpath.join(OBJECTS_DIR));
+    let device = b"phone".to_vec();
+    v.enroll_device(&device, "Phone").unwrap();
+
+    assert!(v.rekey(b"wrong password!!", fast(), &mut |_| {}).is_err());
+    assert_eq!(
+        v.vault_id(),
+        &old_id[..],
+        "a refused re-key changes nothing"
+    );
+
+    let mut last = Progress::default();
+    let phrase = v.rekey(PW, fast(), &mut |p| last = p.clone()).unwrap();
+    assert_eq!(last.files_done, last.files_total);
+    assert_ne!(v.vault_id(), &old_id[..]);
+    assert_ne!(phrase.as_str(), old_phrase.as_str());
+    assert!(v.check(&mut |_| {}).unwrap().is_clean());
+    // Every blob is new; nothing of the old vault is left in the folder.
+    assert!(old_blobs.iter().all(|b| !b.exists()));
+    let siblings: Vec<_> = fs::read_dir(tmp.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(siblings.len(), 2, "{siblings:?}");
+    // Fingerprint slots are not carried over.
+    assert!(v.device_expires(&device).is_none());
+
+    let out = tmp.path().join("out");
+    let ids: Vec<Id> = v.manifest().children(None).iter().map(|e| e.id).collect();
+    v.export(&ids, &out, &mut |_| {}).unwrap();
+    same_tree(&src.join("proj"), &out.join("proj"));
+    drop(v);
+
+    // The old phrase no longer opens this copy; the new one does.
+    let old_key = recovery::from_phrase(&old_phrase).unwrap();
+    assert!(Vault::unlock(&vpath, &Unlock::Recovery(&old_key)).is_err());
+    let new_key = recovery::from_phrase(&phrase).unwrap();
+    Vault::unlock(&vpath, &Unlock::Recovery(&new_key)).unwrap();
+    Vault::unlock(&vpath, &Unlock::Password(PW)).unwrap();
+}
+
+#[test]
+fn an_interrupted_rekey_swap_puts_the_old_vault_back() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vpath = tmp.path().join("v");
+    let (mut v, _) = Vault::create(&vpath, PW, fast()).unwrap();
+    v.create_folder(None, "kept").unwrap();
+    drop(v);
+    // The moment between moving the old vault aside and the new one in.
+    fs::rename(&vpath, tmp.path().join(".v.old-12345678")).unwrap();
+    let v = Vault::unlock(&vpath, &Unlock::Password(PW)).unwrap();
+    assert!(v.manifest().children(None).iter().any(|e| e.name == "kept"));
+}
+
+#[test]
+fn edited_contents_replace_the_old_blob() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vpath = tmp.path().join("v");
+    let (mut v, _) = Vault::create(&vpath, PW, fast()).unwrap();
+    let src = tmp.path().join("notes.txt");
+    fs::write(&src, b"first version").unwrap();
+    v.import(&[src], None, false, &mut |_| {}).unwrap();
+    let id = v.manifest().children(None)[0].id;
+    let before = all_files(&vpath.join(OBJECTS_DIR));
+    v.replace_contents(id, "second, longer version ✓".as_bytes())
+        .unwrap();
+    let mut out = Vec::new();
+    v.read_file(id, &mut out).unwrap();
+    assert_eq!(out, "second, longer version ✓".as_bytes());
+    let e = v.manifest().get(&id).unwrap();
+    assert_eq!(e.size, out.len() as u64);
+    assert_eq!(e.name, "notes.txt");
+    assert!(before.iter().all(|b| !b.exists()), "old blob removed");
+    assert!(v.check(&mut |_| {}).unwrap().is_clean());
+    let folder = v.create_folder(None, "dir").unwrap();
+    assert!(v.replace_contents(folder, b"x").is_err());
+}

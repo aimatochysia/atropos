@@ -10,6 +10,7 @@ import '../src/rust/api/viewer.dart';
 import '../state/app_controller.dart';
 import 'card_flows.dart';
 import 'check_page.dart';
+import 'package_browser_page.dart';
 import 'package_flows.dart';
 import 'recovery_page.dart';
 import 'secret_dialog.dart';
@@ -99,8 +100,11 @@ class _VaultPageState extends State<VaultPage> {
   void _view(EntryInfo e) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            ViewerPage(session: _s, entry: e, onExport: () => _export([e])),
+        builder: (_) => ViewerPage.vault(
+          session: _s,
+          entry: e,
+          onExport: () => _export([e]),
+        ),
       ),
     );
   }
@@ -615,6 +619,26 @@ class _VaultPageState extends State<VaultPage> {
     );
   }
 
+  Future<void> _rekey() async {
+    final app = AppScope.read(context);
+    final oldId = _s.vaultId;
+    // The old session locks during the re-key; don't treat that as a lock.
+    _closing = true;
+    final fresh = await rekeyFlow(context, _s);
+    if (fresh == null) {
+      _closing = false;
+      return;
+    }
+    try {
+      await app.biometrics.remove(oldId);
+    } catch (_) {}
+    await app.opened(fresh);
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(builder: (_) => VaultPage(session: fresh)),
+    );
+  }
+
   Future<void> _lock() async {
     await AppScope.read(context).lock(_s.path);
   }
@@ -706,6 +730,7 @@ class _VaultPageState extends State<VaultPage> {
                       'info' => _info(),
                       'password' => _changePassword(),
                       'strength' => passwordStrengthFlow(context, _s),
+                      'rekey' => _rekey(),
                       'check' =>
                         Navigator.of(context)
                             .push(
@@ -726,13 +751,18 @@ class _VaultPageState extends State<VaultPage> {
                         _s,
                         _parent,
                       ).then((ok) => ok ? _reload() : null),
+                      'browse' => browsePackageFlow(context, vault: _s),
                       _ => null,
                     },
                     itemBuilder: (_) => const [
                       PopupMenuItem(value: 'info', child: Text('Vault info')),
                       PopupMenuItem(
+                        value: 'browse',
+                        child: Text('View a package'),
+                      ),
+                      PopupMenuItem(
                         value: 'package',
-                        child: Text('Open package'),
+                        child: Text('Add a package to this vault'),
                       ),
                       PopupMenuItem(
                         value: 'password',
@@ -757,6 +787,10 @@ class _VaultPageState extends State<VaultPage> {
                       PopupMenuItem(
                         value: 'check',
                         child: Text('Check and repair'),
+                      ),
+                      PopupMenuItem(
+                        value: 'rekey',
+                        child: Text('Re-key vault'),
                       ),
                     ],
                   ),

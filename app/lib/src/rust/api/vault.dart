@@ -7,6 +7,7 @@ import '../error.dart';
 import '../frb_generated.dart';
 import 'card.dart';
 import 'maintenance.dart';
+import 'package.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
@@ -15,8 +16,8 @@ import 'secure_input.dart';
 import 'viewer.dart';
 part 'vault.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `locked`, `outcome_info`, `parse_device`, `parse_id`, `parse_ids`, `parse_parent`, `progress_info`, `reporter`, `session_of`, `session`, `strong_session`, `strong`, `try_with`, `vault_name`, `with`, `wrong_secret`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `eq`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `locked`, `new_session`, `outcome_info`, `parse_device`, `parse_id`, `parse_ids`, `parse_parent`, `progress_info`, `reporter`, `session_of`, `session`, `strong_session`, `strong`, `take_for_rekey`, `try_with`, `vault_name`, `with`, `wrong_secret`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`
 
 /// Whether `path` is an Atropos vault folder.
 bool isVault({required String path}) =>
@@ -111,6 +112,24 @@ abstract class CreatedVault implements RustOpaqueInterface {
   set session(VaultSession session);
 }
 
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RekeyDone>>
+abstract class RekeyDone implements RustOpaqueInterface {
+  String get recoveryPhrase;
+
+  VaultSession get session;
+
+  set recoveryPhrase(String recoveryPhrase);
+
+  set session(VaultSession session);
+}
+
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RekeyEvent>>
+abstract class RekeyEvent implements RustOpaqueInterface {
+  RekeyDone? done();
+
+  ProgressInfo? progress();
+}
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<VaultSession>>
 abstract class VaultSession implements RustOpaqueInterface {
   /// Adds the card that `transmit` reaches. Checks the PIN and that the card
@@ -120,6 +139,9 @@ abstract class VaultSession implements RustOpaqueInterface {
     required String name,
     required FutureOr<Uint8List> Function(Uint8List) transmit,
   });
+
+  /// Opens a package locked to this vault for browsing.
+  Future<PackageSession> browsePackage({required String path});
 
   Future<List<CardSlotInfo>> cards();
 
@@ -201,6 +223,11 @@ abstract class VaultSession implements RustOpaqueInterface {
 
   String get path;
 
+  /// Re-encrypts the whole vault under new keys and a new recovery
+  /// phrase. Needs the password, which stays the same. Fingerprint and
+  /// card unlock have to be set up again afterwards.
+  Stream<RekeyEvent> rekey({required SecretInput password});
+
   Future<void> removeCard({required String id});
 
   Future<void> removeDevice({required String deviceId});
@@ -210,6 +237,9 @@ abstract class VaultSession implements RustOpaqueInterface {
   /// Fixes what the last check found. With `remove_broken`, damaged and
   /// missing files are taken off the list.
   Future<RepairInfo> repair({required bool removeBroken});
+
+  /// Saves edited text as the new contents of file `id` (UTF-8).
+  Future<void> saveText({required String id, required String text});
 
   /// Seals items into one `.atropos` file. With a passphrase anyone who
   /// knows it can open the package; without, only this vault can.

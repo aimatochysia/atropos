@@ -5,6 +5,8 @@ import 'package:flutter/widgets.dart';
 import '../core/biometrics.dart';
 import '../core/cards.dart';
 import '../core/platform_files.dart';
+import '../core/secure_clipboard.dart';
+import '../src/rust/api/package.dart';
 import '../src/rust/api/settings.dart' as rs;
 import '../src/rust/api/vault.dart';
 
@@ -85,6 +87,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   bool loaded = false;
 
   final Map<String, VaultSession> _open = {};
+  final Set<PackageSession> _packages = {};
   int _picking = 0;
   DateTime? _leftAt;
   Timer? _lockTimer;
@@ -122,7 +125,29 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
 
   VaultSession? session(String path) => _open[path];
   bool isOpen(String path) => _open.containsKey(path);
-  bool get anyOpen => _open.isNotEmpty;
+
+  /// The unlocked vault with this id, if any.
+  VaultSession? sessionForVaultId(String id) {
+    for (final s in _open.values) {
+      if (s.vaultId == id) return s;
+    }
+    return null;
+  }
+
+  bool get anyOpen => _open.isNotEmpty || _packages.isNotEmpty;
+
+  /// Packages opened for browsing; auto-lock closes them like vaults.
+  void packageOpened(PackageSession p) {
+    _packages.add(p);
+    notifyListeners();
+  }
+
+  bool isPackageOpen(PackageSession p) => _packages.contains(p);
+
+  void closePackage(PackageSession p) {
+    if (_packages.remove(p)) notifyListeners();
+    p.close();
+  }
 
   /// Registers a freshly unlocked or created vault.
   Future<void> opened(VaultSession s) async {
@@ -150,7 +175,13 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> lockAll() async {
     final sessions = _open.values.toList();
+    final packages = _packages.toList();
     _open.clear();
+    _packages.clear();
+    for (final p in packages) {
+      p.close();
+    }
+    unawaited(SecureClipboard.clearIfOurs());
     _lockTimer?.cancel();
     notifyListeners();
     for (final s in sessions) {

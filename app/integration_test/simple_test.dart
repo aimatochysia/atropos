@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:atropos/app.dart';
@@ -8,12 +9,14 @@ import 'package:atropos/core/crypto_service.dart';
 import 'package:atropos/core/platform_files.dart';
 import 'package:atropos/src/rust/api/card.dart' as card;
 import 'package:atropos/src/rust/api/maintenance.dart';
+import 'package:atropos/src/rust/api/package.dart';
 import 'package:atropos/src/rust/api/secure_input.dart';
 import 'package:atropos/src/rust/api/vault.dart';
 import 'package:atropos/src/rust/api/viewer.dart';
 import 'package:atropos/src/rust/frb_generated.dart';
 import 'package:atropos/state/app_controller.dart';
 import 'package:atropos/ui/check_page.dart';
+import 'package:atropos/ui/package_browser_page.dart';
 import 'package:atropos/ui/selftest_page.dart';
 import 'package:atropos/ui/viewer_page.dart';
 import 'package:flutter/material.dart';
@@ -111,6 +114,34 @@ List<int> tinyPdf() {
 
 const tinyPng =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==';
+
+/// Two seconds of a quiet 440 Hz tone, 8 kHz stereo 16-bit WAV.
+Uint8List tinyWav() {
+  const rate = 8000, frames = rate * 2;
+  final b = BytesBuilder();
+  void u32(int v) =>
+      b.add((ByteData(4)..setUint32(0, v, Endian.little)).buffer.asUint8List());
+  void u16(int v) =>
+      b.add((ByteData(2)..setUint16(0, v, Endian.little)).buffer.asUint8List());
+  b.add(ascii.encode('RIFF'));
+  u32(36 + frames * 4);
+  b.add(ascii.encode('WAVEfmt '));
+  u32(16);
+  u16(1);
+  u16(2);
+  u32(rate);
+  u32(rate * 4);
+  u16(4);
+  u16(16);
+  b.add(ascii.encode('data'));
+  u32(frames * 4);
+  for (var i = 0; i < frames; i++) {
+    final v = (math.sin(i * 440 * 2 * math.pi / rate) * 4000).round() & 0xffff;
+    u16(v);
+    u16(v);
+  }
+  return b.toBytes();
+}
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -371,7 +402,7 @@ void main() {
         AppScope(
           controller: controller,
           child: MaterialApp(
-            home: ViewerPage(
+            home: ViewerPage.vault(
               key: ValueKey(name),
               session: s,
               entry: entries[name]!,
@@ -479,6 +510,133 @@ void main() {
     expect(find.textContaining('Removed 1 file'), findsOneWidget);
     expect((await s.list()).map((e) => e.name), ['a.txt']);
     await tester.pumpWidget(const SizedBox());
+    await s.lock();
+  });
+
+  testWidgets('re-key keeps the files and changes the keys', (tester) async {
+    final src = Directory('${tmp.path}/src')..createSync();
+    File('${src.path}/a.txt').writeAsStringSync('alpha');
+    final created = await createVault(
+      parentDir: tmp.path,
+      name: 'Rekey',
+      password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+    );
+    final s = created.session;
+    await finish(
+      s.import_(sources: ['${src.path}/a.txt'], deleteOriginals: false),
+    );
+    final oldId = s.vaultId;
+    RekeyDone? done;
+    await for (final e in s.rekey(
+      password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+    )) {
+      done = e.done() ?? done;
+    }
+    expect(done, isNotNull);
+    expect(s.isLocked(), isTrue);
+    final fresh = done!.session;
+    expect(fresh.vaultId, isNot(oldId));
+    expect(done.recoveryPhrase, isNot(created.recoveryPhrase));
+    expect((await fresh.list()).map((e) => e.name), ['a.txt']);
+    await fresh.lock();
+    await unlockWithRecoveryPhrase(
+      path: fresh.path,
+      phrase: SecretInput.fromText(text: done.recoveryPhrase),
+    );
+  });
+  testWidgets('a package opens in the app without extracting', (tester) async {
+    tester.view.physicalSize = const Size(900, 1800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final src = Directory('${tmp.path}/trip')..createSync();
+    Directory('${src.path}/docs').createSync();
+    File('${src.path}/docs/plan.txt').writeAsStringSync('meet at noon');
+    File('${src.path}/song.wav').writeAsBytesSync(tinyWav());
+    final out = '${tmp.path}/trip.atropos';
+    await finish(
+      sealFiles(
+        sources: [src.path],
+        outFile: out,
+        passphrase: SecretInput.fromText(text: 'violet harbor tundra 9'),
+      ),
+    );
+    await expectLater(
+      browsePackage(
+        path: out,
+        passphrase: SecretInput.fromText(text: 'wrong passphrase 1'),
+      ),
+      throwsA(anything),
+    );
+    final p = await browsePackage(
+      path: out,
+      passphrase: SecretInput.fromText(text: 'violet harbor tundra 9'),
+    );
+    final top = await p.list();
+    expect(top.map((e) => e.name), ['trip']);
+    final trip = await p.list(parent: top.single.id);
+    expect(trip.map((e) => e.name), ['docs', 'song.wav']);
+
+    // Audio is read in memory; playing is not tried (CI has no speakers).
+    final song = await p.openViewer(id: trip[1].id);
+    expect(song.kind, PreviewKind.audio);
+    expect((await song.audioInfo()).durationMs, 2000);
+    expect(song.audioState().playing, isFalse);
+
+    final controller = AppController(
+      store: RustSettingsStore('${tmp.path}/config'),
+      files: TempFiles(tmp.path),
+    );
+    await controller.load();
+    controller.packageOpened(p);
+    await tester.pumpWidget(
+      AppScope(
+        controller: controller,
+        child: MaterialApp(home: PackageBrowserPage(package: p)),
+      ),
+    );
+    await pumpUntil(tester, find.byKey(const Key('package-item-trip')));
+    await tester.tap(find.byKey(const Key('package-item-trip')));
+    await pumpUntil(tester, find.byKey(const Key('package-item-docs')));
+    await tester.tap(find.byKey(const Key('package-item-docs')));
+    await pumpUntil(tester, find.byKey(const Key('package-item-plan.txt')));
+    await tester.tap(find.byKey(const Key('package-item-plan.txt')));
+    await pumpUntil(tester, find.byKey(const Key('viewer-text')));
+    expect(find.text('meet at noon'), findsOneWidget);
+    // Read-only: no edit, no export.
+    expect(find.byKey(const Key('viewer-edit')), findsNothing);
+    expect(find.byKey(const Key('viewer-export')), findsNothing);
+
+    // Locking closes the package and everything opened from it.
+    await controller.lockAll();
+    expect(p.isClosed(), isTrue);
+    await expectLater(song.audioInfo(), throwsA(anything));
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('text can be edited and saved back into the vault', (
+    tester,
+  ) async {
+    final src = Directory('${tmp.path}/src')..createSync();
+    File('${src.path}/todo.txt').writeAsStringSync('buy milk\r\n');
+    final created = await createVault(
+      parentDir: tmp.path,
+      name: 'Edit',
+      password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+    );
+    final s = created.session;
+    await finish(
+      s.import_(sources: ['${src.path}/todo.txt'], deleteOriginals: false),
+    );
+    final e = (await s.list()).single;
+    final v = await s.openViewer(id: e.id);
+    expect((await v.text()).editable, isTrue);
+    expect(await v.editableText(), 'buy milk\r\n');
+    v.close();
+    await s.saveText(id: e.id, text: 'buy milk\r\nand bread\r\n');
+    final again = await s.openViewer(id: e.id);
+    expect(await again.editableText(), 'buy milk\r\nand bread\r\n');
+    expect((await s.list()).single.size.toInt(), 21);
+    again.close();
     await s.lock();
   });
 }

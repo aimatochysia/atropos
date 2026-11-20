@@ -8,7 +8,7 @@ pkgdesc="Encrypt folders and files with hybrid post-quantum cryptography"
 arch=('x86_64')
 url="https://github.com/aimatochysia/atropos"
 license=('custom')
-depends=('gtk3' 'glibc' 'pcsclite')
+depends=('gtk3' 'glibc' 'pcsclite' 'alsa-lib')
 optdepends=('ccid: USB smartcard readers')
 options=('!strip' '!debug')
 
