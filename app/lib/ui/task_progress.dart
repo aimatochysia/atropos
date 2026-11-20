@@ -144,5 +144,6 @@ class _TaskDialogState extends State<_TaskDialog> {
   }
 }
 
-String plural(BigInt n, String one, [String? many]) =>
-    '$n ${n == BigInt.one ? one : (many ?? '${one}s')}';
+/// "1 file", "3 files". [n] is an int or a BigInt.
+String plural(Object n, String one, [String? many]) =>
+    '$n ${n == 1 || n == BigInt.one ? one : (many ?? '${one}s')}';

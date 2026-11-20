@@ -9,6 +9,7 @@
 //! ```
 pub(crate) mod b64;
 pub mod blob;
+pub mod check;
 pub mod header;
 pub mod manifest;
 pub mod package;
@@ -104,6 +105,8 @@ pub struct Vault {
     secrets: VaultSecrets,
     manifest: Manifest,
     blobs: BlobReader,
+    /// What the last check found, for [Vault::repair].
+    last_check: Option<check::CheckReport>,
 }
 
 struct PendingFile {
@@ -161,6 +164,7 @@ impl Vault {
                 secrets,
                 manifest,
                 blobs,
+                last_check: None,
             },
             phrase,
         ))
@@ -199,6 +203,7 @@ impl Vault {
             secrets,
             manifest,
             blobs: BlobReader::new(&path.join(OBJECTS_DIR), &vault_id),
+            last_check: None,
         };
         // Re-seal the slot that opened so its stored bytes change each unlock.
         // A read-only vault (e.g. on a CD) still opens.
@@ -242,6 +247,7 @@ impl Vault {
             secrets,
             manifest,
             blobs: BlobReader::new(&self.path.join(OBJECTS_DIR), self.vault_id()),
+            last_check: None,
         })
     }
 
@@ -267,6 +273,39 @@ impl Vault {
         let mut body = self.header.body.clone();
         body.remove_slots(SlotKind::Password);
         body.add_slot(&self.secrets, &Unlock::Password(new_password), cost)?;
+        self.save_header(body)
+    }
+
+    /// The Argon2id cost protecting the password slot.
+    pub fn password_cost(&self) -> Option<Argon2Cost> {
+        self.header
+            .body
+            .slots
+            .iter()
+            .find(|s| s.kind == SlotKind::Password)
+            .and_then(|s| s.argon2)
+            .map(Argon2Cost::from)
+    }
+
+    /// Re-wraps the password slot with a different Argon2id cost. Needs the
+    /// current password, which is checked against the slot first.
+    pub fn set_password_cost(&mut self, password: &[u8], cost: Argon2Cost) -> CoreResult<()> {
+        cost.validate()?;
+        let (_, slot) = self
+            .header
+            .body
+            .unlock(&Unlock::Password(password))
+            .map_err(|_| CoreError::InvalidInput {
+                message: "that is not this vault's password".into(),
+            })?;
+        if self.header.body.slots[slot].kind != SlotKind::Password {
+            return Err(CoreError::InvalidInput {
+                message: "that is not this vault's password".into(),
+            });
+        }
+        let mut body = self.header.body.clone();
+        body.remove_slots(SlotKind::Password);
+        body.add_slot(&self.secrets, &Unlock::Password(password), cost)?;
         self.save_header(body)
     }
 

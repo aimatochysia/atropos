@@ -31,6 +31,10 @@ validated module.
   receives pixels or text lines, and the plaintext is wiped when the viewer
   closes or the vault locks. Other file types show their details and can be
   exported.
+- v0.5: "Check and repair" decrypts and verifies every file, finds damaged or
+  missing files, leftovers from interrupted writes and unreadable parts of the
+  file list (which no longer stop the vault from opening), and fixes them.
+  Password protection strength can be set to 64 MB, 256 MB or 1 GB.
 
 ## Building
 
