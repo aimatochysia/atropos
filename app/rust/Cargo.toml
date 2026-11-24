@@ -1,6 +1,6 @@
 [package]
 name = "atropos_core"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 description = "Core encryption, vault and update logic for the Atropos app"
 license = "MIT"
