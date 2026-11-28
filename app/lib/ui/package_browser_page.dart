@@ -11,6 +11,7 @@ import '../src/rust/api/vault.dart' show EntryInfo, EntryKind, VaultSession;
 import '../src/rust/api/viewer.dart';
 import '../state/app_controller.dart';
 import 'file_menu.dart';
+import 'home_page.dart' show openAtroposFile;
 import 'secret_dialog.dart';
 import 'storage_access.dart';
 import 'task_progress.dart' show plural;
@@ -38,7 +39,7 @@ Future<void> browsePackageFlow(
     if (path != null && !File(file).existsSync()) {
       final forget = await confirm(
         context,
-        title: 'Package not found',
+        title: 'File not found',
         message:
             'It may have been moved, renamed or deleted, or its drive is '
             'not connected. Remove it from the recent list?',
@@ -53,7 +54,7 @@ Future<void> browsePackageFlow(
     if (info.needsPassphrase) {
       final pass = await askSecret(
         context,
-        title: 'Package passphrase',
+        title: 'Passphrase',
         action: 'Open',
       );
       if (pass == null || !context.mounted) return;
@@ -71,8 +72,8 @@ Future<void> browsePackageFlow(
           context,
           title: 'Locked to a vault',
           message:
-              'This package can only be opened by the vault it was sealed '
-              'to. Unlock that vault first, then open the package again.',
+              'This file can only be opened by the vault it was sealed '
+              'to. Unlock that vault first, then open the file again.',
         );
         return;
       }
@@ -130,6 +131,10 @@ class _PackageBrowserPageState extends State<PackageBrowserPage> {
 
   PackageSession get _p => widget.package;
 
+  /// A passphrase file that can become a vault (checked once).
+  late final bool _upgradable =
+      widget.canSave && core.isOldPackage(path: _p.path);
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -179,6 +184,17 @@ class _PackageBrowserPageState extends State<PackageBrowserPage> {
       _items = null;
     });
     _reload();
+  }
+
+  /// Closes this file and offers to turn it into a vault.
+  Future<void> _upgrade() async {
+    final path = _p.path;
+    final nav = Navigator.of(context);
+    final root = nav.context;
+    _closing = true;
+    _app?.closePackage(_p);
+    nav.pop();
+    if (root.mounted) await openAtroposFile(root, path);
   }
 
   Future<void> _sort(core.SortOrder s) async {
@@ -259,7 +275,7 @@ class _PackageBrowserPageState extends State<PackageBrowserPage> {
       name: e.name,
       current: app.settings.openAsFor(e.name),
       note:
-          'Remembered for every ".${fileExtension(e.name)}" file in packages '
+          'Remembered for every ".${fileExtension(e.name)}" file in sealed files '
           'on this device.',
     );
     if (k == null || !mounted) return;
@@ -413,6 +429,13 @@ class _PackageBrowserPageState extends State<PackageBrowserPage> {
         appBar: AppBar(
           title: Text(title, overflow: TextOverflow.ellipsis),
           actions: [
+            if (_upgradable)
+              TextButton.icon(
+                key: const Key('package-upgrade'),
+                onPressed: _upgrade,
+                icon: const Icon(Icons.upgrade),
+                label: const Text('Upgrade'),
+              ),
             SortButton(sort: app.settings.packageSort, onChanged: _sort),
           ],
           bottom: PreferredSize(
@@ -421,8 +444,8 @@ class _PackageBrowserPageState extends State<PackageBrowserPage> {
               padding: const EdgeInsets.only(bottom: 8, left: 16, right: 16),
               child: Text(
                 widget.canSave
-                    ? 'Files are decrypted in memory only. Saving an edit '
-                          'rewrites the package.'
+                    ? 'Older .atropos file. Files are decrypted in memory '
+                          'only; saving an edit rewrites the file.'
                     : 'Read-only copy. Files are decrypted in memory only.',
                 key: const Key('package-readonly'),
                 textAlign: TextAlign.center,
@@ -435,7 +458,7 @@ class _PackageBrowserPageState extends State<PackageBrowserPage> {
                 child: Padding(
                   padding: const EdgeInsets.all(24),
                   child: Text(
-                    'This package could not be read.',
+                    'This file could not be read.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.error,

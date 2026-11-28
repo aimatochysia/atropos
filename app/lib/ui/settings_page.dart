@@ -116,11 +116,11 @@ class SettingsPage extends StatelessWidget {
                 child: const Text('Undo'),
               ),
             ),
-          const _Header('Packages and files'),
+          const _Header('Sealed files and file types'),
           SwitchListTile(
             key: const Key('remember-packages'),
             secondary: const Icon(Icons.history),
-            title: const Text('Remember packages I open'),
+            title: const Text('Remember older .atropos files I open'),
             subtitle: const Text(
               'Lists them on the home screen by file name. They still need '
               'their passphrase or vault each time. Turning this off clears '
@@ -135,7 +135,7 @@ class SettingsPage extends StatelessWidget {
             title: const Text('File types opened another way'),
             subtitle: Text(
               s.openAsRules.isEmpty
-                  ? 'None. Use "Open as" on a file in a package to choose.'
+                  ? 'None. Use "Open as" on a file in a sealed file to choose.'
                   : s.openAsRules
                         .map((r) => '.${r.extension_} as ${r.kind.name}')
                         .join(', '),
@@ -147,7 +147,7 @@ class SettingsPage extends StatelessWidget {
                       context,
                       title: 'Forget these choices?',
                       message:
-                          'Files in packages open by their type again. '
+                          'Files in sealed files open by their type again. '
                           'Choices made for files inside a vault are kept '
                           'in that vault.',
                       action: 'Forget',

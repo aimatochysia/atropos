@@ -93,7 +93,9 @@ class PlatformFiles {
     final dot = name.lastIndexOf('.');
     final stem = dot > 0 ? name.substring(0, dot) : name;
     final ext = dot > 0 ? name.substring(dot) : '';
-    for (var i = 2; File(candidate).existsSync(); i++) {
+    bool taken(String p) =>
+        FileSystemEntity.typeSync(p) != FileSystemEntityType.notFound;
+    for (var i = 2; taken(candidate); i++) {
       candidate = '$dir$sep$stem ($i)$ext';
     }
     return candidate;

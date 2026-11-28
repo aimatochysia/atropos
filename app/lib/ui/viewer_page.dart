@@ -372,7 +372,7 @@ class _ViewerPageState extends State<ViewerPage> {
       current: _src.openAsOf?.call(e) ?? _viewer?.kind,
       note: _src.place == 'package'
           ? 'Remembered for every ".${fileExtension(e.name)}" file in '
-                'packages on this device.'
+                'sealed files on this device.'
           : 'Remembered for this file inside the vault.',
     );
     if (k == null || !mounted) return;

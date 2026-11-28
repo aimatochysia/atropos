@@ -13,7 +13,7 @@ import 'widgets/feedback.dart';
 
 String _sealedSummary(OutcomeInfo o) =>
     'Sealed ${plural(o.files, 'file')} (${formatBytes(o.bytes.toInt())}) '
-    'into one encrypted package.';
+    'into one encrypted file.';
 
 String _openedSummary(OutcomeInfo o) =>
     'Opened ${plural(o.files, 'file')} and ${plural(o.folders, 'folder')} '
@@ -67,7 +67,7 @@ Future<void> sealFilesFromDisk(BuildContext context) async {
     final first = _baseName(picked.paths.first);
     final out = await app.whilePicking(
       () => app.files.pickSaveFile(
-        picked.paths.length == 1 ? '$first.atropos' : 'package.atropos',
+        picked.paths.length == 1 ? '$first.atropos' : 'sealed.atropos',
       ),
     );
     if (out == null || !context.mounted) return;
@@ -75,7 +75,7 @@ Future<void> sealFilesFromDisk(BuildContext context) async {
       context,
       title: 'Choose a passphrase',
       message:
-          'Anyone with this passphrase can open the package. Share it '
+          'Anyone with this passphrase can open the file. Share it '
           'separately from the file, for example by phone.',
       action: 'Seal',
       isNew: true,
@@ -83,7 +83,7 @@ Future<void> sealFilesFromDisk(BuildContext context) async {
     if (pass == null || !context.mounted) return;
     await runTask(
       context,
-      title: 'Sealing package',
+      title: 'Sealing',
       start: () =>
           core.sealFiles(sources: picked.paths, outFile: out, passphrase: pass),
       summary: _sealedSummary,
@@ -109,8 +109,8 @@ Future<void> extractPackageToDisk(BuildContext context) async {
         context,
         title: 'Locked to a vault',
         message:
-            'This package can only be opened by the vault it was sealed '
-            'to. Unlock that vault, then choose "Open package" in its menu.',
+            'This file can only be opened by the vault it was sealed '
+            'to. Unlock that vault, then choose "Add a sealed file here" in its menu.',
       );
       return;
     }
@@ -122,21 +122,17 @@ Future<void> extractPackageToDisk(BuildContext context) async {
       context,
       title: 'Write decrypted files?',
       message:
-          'The package contents will be saved unencrypted in\n$dest\n\n'
+          'The contents will be saved unencrypted in\n$dest\n\n'
           'Anyone with access to that folder can read them.',
       action: 'Extract',
       destructive: true,
     );
     if (!ok || !context.mounted) return;
-    final pass = await askSecret(
-      context,
-      title: 'Package passphrase',
-      action: 'Open',
-    );
+    final pass = await askSecret(context, title: 'Passphrase', action: 'Open');
     if (pass == null || !context.mounted) return;
     await runTask(
       context,
-      title: 'Opening package',
+      title: 'Opening',
       start: () =>
           core.extractFiles(packageFile: file, passphrase: pass, destDir: dest),
       summary: _openedSummary,
@@ -159,7 +155,7 @@ Future<void> sealFromVault(
   final mode = await showDialog<String>(
     context: context,
     builder: (ctx) => SimpleDialog(
-      title: const Text('Who can open the package?'),
+      title: const Text('Who can open the sealed file?'),
       children: [
         SimpleDialogOption(
           key: const Key('seal-to-vault'),
@@ -204,7 +200,7 @@ Future<void> sealFromVault(
   }
   await runTask(
     context,
-    title: 'Sealing package',
+    title: 'Sealing',
     start: () => session.sealPackage(ids: ids, outFile: out, passphrase: pass),
     summary: _sealedSummary,
   );
@@ -227,16 +223,12 @@ Future<bool> openPackageIntoVault(
     if (info == null || !context.mounted) return false;
     SecretInput? pass;
     if (info.needsPassphrase) {
-      pass = await askSecret(
-        context,
-        title: 'Package passphrase',
-        action: 'Open',
-      );
+      pass = await askSecret(context, title: 'Passphrase', action: 'Open');
       if (pass == null || !context.mounted) return false;
     }
     final o = await runTask(
       context,
-      title: 'Adding package to the vault',
+      title: 'Adding to the vault',
       start: () => session.openPackage(
         packageFile: file,
         passphrase: pass,

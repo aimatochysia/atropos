@@ -200,6 +200,9 @@ impl Vault {
             });
         }
         let (header, secrets, phrase) = new_keys(password, cost)?;
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir)?;
+        }
         let vault = Self::write_single(
             path,
             header,

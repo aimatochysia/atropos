@@ -19,6 +19,7 @@ import 'package:atropos/ui/check_page.dart';
 import 'package:atropos/ui/package_browser_page.dart';
 import 'package:atropos/ui/selftest_page.dart';
 import 'package:atropos/ui/update_ui.dart';
+import 'package:atropos/ui/vault_page.dart';
 import 'package:atropos/ui/viewer_page.dart';
 import 'package:atropos/state/update_controller.dart';
 import 'package:flutter/material.dart';
@@ -178,6 +179,7 @@ void main() {
       parentDir: tmp.path,
       name: 'Test',
       password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+      lfs: true,
     );
     final phrase = created.recoveryPhrase;
     expect(phrase.split(' '), hasLength(24));
@@ -265,6 +267,7 @@ void main() {
       parentDir: tmp.path,
       name: 'c',
       password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+      lfs: true,
     );
     expect(await card.vaultCardCount(path: dir), 0);
     expect(await created.session.cards(), isEmpty);
@@ -347,7 +350,7 @@ void main() {
     // unlocks it without typing anything.
     final device = controller.deviceId!;
     final s = await unlockWithPassword(
-      path: '${tmp.path}/vaults/Keys',
+      path: '${tmp.path}/vaults/Keys.atropos',
       password: SecretInput.fromText(text: pw),
       deviceId: device,
     );
@@ -379,6 +382,7 @@ void main() {
       parentDir: tmp.path,
       name: 'Viewer',
       password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+      lfs: true,
     );
     final s = created.session;
     await finish(
@@ -461,6 +465,7 @@ void main() {
       parentDir: tmp.path,
       name: 'Check',
       password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+      lfs: true,
     );
     final s = created.session;
     await finish(
@@ -527,6 +532,7 @@ void main() {
       parentDir: tmp.path,
       name: 'Rekey',
       password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+      lfs: true,
     );
     final s = created.session;
     await finish(
@@ -655,6 +661,7 @@ void main() {
       parentDir: tmp.path,
       name: 'Edit',
       password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+      lfs: true,
     );
     final s = created.session;
     await finish(
@@ -695,6 +702,7 @@ void main() {
       parentDir: tmp.path,
       name: 'Sorts',
       password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+      lfs: true,
     );
     final s = created.session;
     await finish(
@@ -816,6 +824,7 @@ void main() {
       parentDir: tmp.path,
       name: 'Pics',
       password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+      lfs: true,
     );
     final s = created.session;
     await finish(
@@ -876,6 +885,7 @@ void main() {
       parentDir: tmp.path,
       name: 'Pdf',
       password: SecretInput.fromText(text: 'violet harbor tundra 9'),
+      lfs: true,
     );
     final s = created.session;
     await finish(
@@ -919,6 +929,201 @@ void main() {
     await c.packageUsed(out);
     await c.forgetPackage(out);
     expect(c.packages, isEmpty);
+  });
+
+  testWidgets('a single-file vault: notes, folders, cut, copy and drag', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(900, 1800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    const pw = 'violet harbor tundra 9';
+    final created = await createVault(
+      parentDir: tmp.path,
+      name: 'One',
+      password: SecretInput.fromText(text: pw),
+      lfs: false,
+    );
+    final s = created.session;
+    final file = '${tmp.path}/One.atropos';
+    expect(s.isSingle, isTrue);
+    expect(s.path, file);
+    expect(File(file).existsSync(), isTrue);
+    final controller = AppController(
+      store: RustSettingsStore('${tmp.path}/config'),
+      files: TempFiles(tmp.path),
+    );
+    await controller.load();
+    await controller.opened(s);
+    await tester.pumpWidget(
+      AppScope(
+        controller: controller,
+        child: MaterialApp(home: VaultPage(session: s)),
+      ),
+    );
+    await pumpUntil(tester, find.byKey(const Key('vault-add')));
+
+    Future<void> addMenu(String key) async {
+      await tester.tap(find.byKey(const Key('vault-add')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(Key(key)));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> prompt(String text) async {
+      await tester.enterText(find.byKey(const Key('prompt-field')), text);
+      await tester.tap(find.byKey(const Key('prompt-ok')));
+      await tester.pumpAndSettle();
+    }
+
+    // A new Markdown note opens straight in the editor.
+    await addMenu('new-note');
+    await prompt('Note.md');
+    await pumpUntil(tester, find.byKey(const Key('editor-field')));
+    await tester.enterText(find.byKey(const Key('editor-field')), '# Hello');
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('editor-save')));
+    await pumpUntil(tester, find.byKey(const Key('entry-Note.md')));
+
+    // A text file, and a folder.
+    await addMenu('new-text');
+    await prompt('b.txt');
+    await pumpUntil(tester, find.byKey(const Key('editor-field')));
+    await tester.enterText(find.byKey(const Key('editor-field')), 'bee');
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('editor-save')));
+    await pumpUntil(tester, find.byKey(const Key('entry-b.txt')));
+    await addMenu('new-folder');
+    await prompt('Docs');
+    await pumpUntil(tester, find.byKey(const Key('entry-Docs')));
+
+    // Cut the note, open the folder, Move here.
+    await tester.tap(find.byKey(const Key('more-Note.md')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('item-cut')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('paste-here')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('entry-Docs')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('paste-here')));
+    await pumpUntil(tester, find.byKey(const Key('entry-Note.md')));
+    expect(find.byKey(const Key('paste-here')), findsNothing);
+    await tester.tap(find.byKey(const Key('crumb-0')));
+    await pumpUntil(tester, find.byKey(const Key('entry-b.txt')));
+    expect(find.byKey(const Key('entry-Note.md')), findsNothing);
+
+    // Drag the text file onto the folder.
+    final g = await tester.startGesture(
+      tester.getCenter(find.byKey(const Key('entry-b.txt'))),
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+    final target = tester.getCenter(find.byKey(const Key('entry-Docs')));
+    for (var i = 1; i <= 10; i++) {
+      final from = tester.getCenter(find.byKey(const Key('entry-b.txt')));
+      await g.moveTo(Offset.lerp(from, target, i / 10)!);
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+    await g.up();
+    await tester.pumpAndSettle();
+    await pumpUntil(tester, find.textContaining('Moved "b.txt" to Docs'));
+    final top = await s.list();
+    expect(top.map((e) => e.name), ['Docs']);
+    final docs = top.single;
+    final inDocs = await s.list(parent: docs.id);
+    expect(inDocs.map((e) => e.name), ['b.txt', 'Note.md']);
+
+    // Make a copy of the folder, and see its size in Details.
+    await tester.tap(find.byKey(const Key('more-Docs')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('item-duplicate')));
+    await pumpUntil(tester, find.byKey(const Key('entry-Docs (2)')));
+    await tester.tap(find.byKey(const Key('more-Docs (2)')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const Key('item-details')));
+    await tester.tap(find.byKey(const Key('item-details')));
+    await pumpUntil(tester, find.byKey(const Key('details-rows')));
+    expect(find.text('2 files in 0 folders'), findsOneWidget);
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+
+    // Everything is in the file: lock, unlock and read it back.
+    await controller.lock(s.path);
+    await tester.pumpWidget(const SizedBox());
+    final again = await unlockWithPassword(
+      path: file,
+      password: SecretInput.fromText(text: pw),
+    );
+    final copy = (await again.list()).firstWhere((e) => e.name == 'Docs (2)');
+    final note = (await again.list(parent: copy.id))
+        .firstWhere((e) => e.name == 'Note.md');
+    final v = await again.openViewer(id: note.id);
+    expect(await v.editableText(), '# Hello');
+    v.close();
+
+    // A Vault LFS copy opens with the same password.
+    await finish(again.convert(out: '${tmp.path}/One LFS'));
+    final lfs = await unlockWithPassword(
+      path: '${tmp.path}/One LFS',
+      password: SecretInput.fromText(text: pw),
+    );
+    expect(lfs.isSingle, isFalse);
+    expect((await lfs.list()).map((e) => e.name), ['Docs', 'Docs (2)']);
+    await lfs.lock();
+    await again.lock();
+  });
+
+  testWidgets('an older passphrase file is upgraded from Home', (tester) async {
+    tester.view.physicalSize = const Size(900, 1800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    const pass = 'violet harbor tundra';
+    final src = Directory('${tmp.path}/box')..createSync();
+    File('${src.path}/a.txt').writeAsStringSync('apple');
+    final out = '${tmp.path}/box.atropos';
+    await finish(
+      sealFiles(
+        sources: [src.path],
+        outFile: out,
+        passphrase: SecretInput.fromText(text: pass),
+      ),
+    );
+    expect(isOldPackage(path: out), isTrue);
+    expect(isVault(path: out), isFalse);
+    final controller = AppController(
+      store: RustSettingsStore('${tmp.path}/config'),
+      files: TempFiles(tmp.path),
+    );
+    await controller.load();
+    await controller.packageUsed(out);
+    await tester.pumpWidget(
+      AtroposApp(crypto: const RustCryptoService(), controller: controller),
+    );
+    await pumpUntil(tester, find.byKey(const Key('recent-box')));
+    await tester.tap(find.byKey(const Key('recent-box')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('upgrade-go')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('secret-first')));
+    await tester.pumpAndSettle();
+    await typeOnKeypad(tester, pass);
+    await tester.tap(find.byKey(const Key('secret-ok')));
+    await pumpUntil(tester, find.byKey(const Key('recovery-written')));
+    await tester.ensureVisible(find.byKey(const Key('recovery-written')));
+    await tester.tap(find.byKey(const Key('recovery-written')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('recovery-continue')));
+    await pumpUntil(tester, find.byKey(const Key('entry-box')));
+    expect(isVault(path: out), isTrue);
+    expect(controller.packages, isEmpty);
+    expect(controller.vaults.map((v) => v.name), contains('box'));
+    final s = controller.session(out)!;
+    final box = (await s.list()).single;
+    final a = (await s.list(parent: box.id)).single;
+    final v = await s.openViewer(id: a.id);
+    expect(await v.editableText(), 'apple');
+    v.close();
+    await controller.lockAll();
+    await tester.pumpWidget(const SizedBox());
   });
 
   testWidgets('a new release pops up once and can be skipped', (tester) async {
