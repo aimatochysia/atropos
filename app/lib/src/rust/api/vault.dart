@@ -16,10 +16,10 @@ import 'secure_input.dart';
 import 'viewer.dart';
 part 'vault.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `entry_info`, `locked`, `natural_key`, `new_session`, `outcome_info`, `parse_device`, `parse_id`, `parse_ids`, `parse_parent`, `progress_info`, `reporter`, `session_of`, `session`, `sort_entries`, `strong_session`, `strong`, `take_for_rekey`, `try_with`, `vault_name`, `with`, `wrong_secret`
+// These functions are ignored because they are not marked as `pub`: `entry_info`, `locked`, `natural_key`, `new_session`, `outcome_info`, `parse_device`, `parse_id`, `parse_ids`, `parse_parent`, `progress_info`, `reporter_rekey`, `reporter`, `session_of`, `session`, `sort_entries`, `strong_session`, `strong`, `take_for_rekey`, `try_with`, `vault_name`, `with`, `wrong_secret`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`
 
-/// Whether `path` is an Atropos vault folder.
+/// Whether `path` is an Atropos vault (a folder, or a single-file vault).
 bool isVault({required String path}) =>
     RustLib.instance.api.crateApiVaultIsVault(path: path);
 
@@ -27,15 +27,35 @@ bool isVault({required String path}) =>
 Future<VaultInfo> inspectVault({required String path}) =>
     RustLib.instance.api.crateApiVaultInspectVault(path: path);
 
-/// Creates the vault folder `parent_dir/name` with `password`.
+/// Whether `path` is an older `.atropos` file locked with a passphrase,
+/// which [upgrade_package] can turn into a single-file vault.
+bool isOldPackage({required String path}) =>
+    RustLib.instance.api.crateApiVaultIsOldPackage(path: path);
+
+/// Turns an older passphrase-locked `.atropos` file into a single-file
+/// vault in place: the passphrase becomes its password, and it gets a
+/// recovery phrase (sent with [RekeyEvent::Done], shown once) and every
+/// other unlock method.
+Stream<RekeyEvent> upgradePackage({
+  required String path,
+  required SecretInput passphrase,
+}) => RustLib.instance.api.crateApiVaultUpgradePackage(
+  path: path,
+  passphrase: passphrase,
+);
+
+/// Creates a vault in `parent_dir` with `password`: the single file
+/// `name.atropos` ("Vault"), or with `lfs` the folder `name` ("Vault LFS").
 Future<CreatedVault> createVault({
   required String parentDir,
   required String name,
   required SecretInput password,
+  required bool lfs,
 }) => RustLib.instance.api.crateApiVaultCreateVault(
   parentDir: parentDir,
   name: name,
   password: password,
+  lfs: lfs,
 );
 
 /// `device_id` (from `device_id()`) renews biometric unlock on this device.
@@ -151,6 +171,21 @@ abstract class VaultSession implements RustOpaqueInterface {
   /// kept for [VaultSession::repair].
   Stream<CheckEvent> check();
 
+  /// Writes a copy of this vault as the other kind at `out` (a single
+  /// file becomes a folder vault and the other way round), with the same
+  /// password, recovery phrase and unlock methods. This vault stays.
+  Stream<TaskEvent> convert({required String out});
+
+  /// Copies items (folders with everything inside) into `parent`.
+  Future<void> copyTo({required List<String> ids, String? parent});
+
+  /// Creates a text file in `parent`. Returns its id.
+  Future<String> createFile({
+    String? parent,
+    required String name,
+    required String text,
+  });
+
   Future<String> createFolder({String? parent, required String name});
 
   /// When the vault was created (Unix seconds); 0 once locked.
@@ -185,6 +220,9 @@ abstract class VaultSession implements RustOpaqueInterface {
     required String destDir,
   });
 
+  /// Files, folders and bytes inside folder `id` (None = the whole vault).
+  Future<OutcomeInfo> folderTotals({String? id});
+
   /// Encrypts files/folders from disk into the vault.
   Stream<TaskEvent> import_({
     required List<String> sources,
@@ -193,6 +231,9 @@ abstract class VaultSession implements RustOpaqueInterface {
   });
 
   bool isLocked();
+
+  /// One `.atropos` file ("Vault"), not a folder ("Vault LFS").
+  bool get isSingle;
 
   /// Items directly inside `parent` (None = the top level), folders
   /// first, then in `sort` order (by name when None).
@@ -521,16 +562,24 @@ class VaultInfo {
   /// Hex; names this vault's biometric key in the platform keystore.
   final String vaultId;
 
+  /// One `.atropos` file ("Vault"), not a folder ("Vault LFS").
+  final bool single;
+
   const VaultInfo({
     required this.path,
     required this.name,
     required this.created,
     required this.vaultId,
+    required this.single,
   });
 
   @override
   int get hashCode =>
-      path.hashCode ^ name.hashCode ^ created.hashCode ^ vaultId.hashCode;
+      path.hashCode ^
+      name.hashCode ^
+      created.hashCode ^
+      vaultId.hashCode ^
+      single.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -540,5 +589,6 @@ class VaultInfo {
           path == other.path &&
           name == other.name &&
           created == other.created &&
-          vaultId == other.vaultId;
+          vaultId == other.vaultId &&
+          single == other.single;
 }

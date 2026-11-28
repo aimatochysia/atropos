@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
 
 import '../core/biometrics.dart';
@@ -36,12 +37,36 @@ class _Crumb {
   final String name;
 }
 
+/// Items picked up with Cut or Copy, waiting for "Move here" or "Paste".
+class _Clip {
+  const _Clip(this.ids, this.names, {required this.cut});
+  final List<String> ids;
+  final List<String> names;
+  final bool cut;
+
+  String get what =>
+      ids.length == 1 ? '"${names.first}"' : '${ids.length} items';
+}
+
+/// What is being dragged: one item, or everything selected.
+class _Drag {
+  const _Drag(this.ids, this.names);
+  final List<String> ids;
+  final List<String> names;
+}
+
+/// Desktop: drag with the mouse and drop files from the file manager.
+final bool _desktop =
+    Platform.isLinux || Platform.isWindows || Platform.isMacOS;
+
 class _VaultPageState extends State<VaultPage> {
   final List<_Crumb> _crumbs = [];
   final Set<String> _selected = {};
   List<EntryInfo> _entries = const [];
   bool _loading = true;
   bool _closing = false;
+  bool _dropHover = false;
+  _Clip? _clip;
   AppController? _app;
 
   VaultSession get _s => widget.session;
@@ -205,13 +230,25 @@ class _VaultPageState extends State<VaultPage> {
             ListTile(
               key: const Key('new-folder'),
               leading: const Icon(Icons.create_new_folder_outlined),
-              title: const Text('New empty folder'),
+              title: const Text('New folder'),
               onTap: () => Navigator.pop(ctx, 'new'),
+            ),
+            ListTile(
+              key: const Key('new-text'),
+              leading: const Icon(Icons.note_add_outlined),
+              title: const Text('New text file'),
+              onTap: () => Navigator.pop(ctx, 'text'),
+            ),
+            ListTile(
+              key: const Key('new-note'),
+              leading: const Icon(Icons.article_outlined),
+              title: const Text('New Markdown note'),
+              onTap: () => Navigator.pop(ctx, 'note'),
             ),
             ListTile(
               key: const Key('open-package'),
               leading: const Icon(Icons.inventory_2_outlined),
-              title: const Text('Open a package here'),
+              title: const Text('Add the files of a sealed .atropos file'),
               onTap: () => Navigator.pop(ctx, 'package'),
             ),
           ],
@@ -222,6 +259,10 @@ class _VaultPageState extends State<VaultPage> {
     switch (choice) {
       case 'new':
         await _newFolder();
+      case 'text':
+        await _newFile(markdown: false);
+      case 'note':
+        await _newFile(markdown: true);
       case 'package':
         if (await openPackageIntoVault(context, _s, _parent)) _reload();
       default:
@@ -229,19 +270,55 @@ class _VaultPageState extends State<VaultPage> {
     }
   }
 
-  Future<void> _newFolder() async {
+  Future<void> _newFolder({EntryInfo? inside}) async {
     final name = await promptText(
       context,
-      title: 'New folder',
+      title: inside == null ? 'New folder' : 'New folder in "${inside.name}"',
       label: 'Name',
+      initial: 'New folder',
       action: 'Create',
     );
-    if (name == null || name.isEmpty || !mounted) return;
-    await guarded(context, () => _s.createFolder(parent: _parent, name: name));
+    if (name == null || name.trim().isEmpty || !mounted) return;
+    await guarded(
+      context,
+      () => _s.createFolder(parent: inside?.id ?? _parent, name: name.trim()),
+    );
     _reload();
   }
 
-  Future<void> _import({required bool folder}) async {
+  /// Makes an empty text file or Markdown note here and opens it for
+  /// writing.
+  Future<void> _newFile({required bool markdown}) async {
+    final name = await promptText(
+      context,
+      title: markdown ? 'New Markdown note' : 'New text file',
+      label: 'Name',
+      initial: markdown ? 'Note.md' : 'New file.txt',
+      action: 'Create',
+    );
+    if (name == null || name.trim().isEmpty || !mounted) return;
+    final id = await guarded(
+      context,
+      () => _s.createFile(parent: _parent, name: name.trim(), text: ''),
+    );
+    if (id == null || !mounted) return;
+    await _reload();
+    if (!mounted) return;
+    final e = _entries.where((x) => x.id == id).firstOrNull;
+    if (e == null) return;
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => TextEditorPage(
+          name: e.name,
+          initial: '',
+          onSave: (text) => _s.saveText(id: id, text: text),
+        ),
+      ),
+    );
+    _reload();
+  }
+
+  Future<void> _import({required bool folder, String? into}) async {
     final app = AppScope.read(context);
     if (!await ensureStorageAccess(context) || !mounted) return;
     final PickedFiles? picked;
@@ -252,6 +329,18 @@ class _VaultPageState extends State<VaultPage> {
       picked = await app.whilePicking(app.files.pickFiles);
     }
     if (picked == null || !mounted) return;
+    await _importPicked(picked, into: into);
+  }
+
+  /// Files or folders dropped from the file manager (desktop).
+  Future<void> _dropped(DropDoneDetails d) async {
+    setState(() => _dropHover = false);
+    final paths = d.files.map((f) => f.path).where((p) => p.isNotEmpty);
+    if (paths.isEmpty) return;
+    await _importPicked(PickedFiles(paths.toList(), temporary: false));
+  }
+
+  Future<void> _importPicked(PickedFiles picked, {String? into}) async {
     try {
       var deleteOriginals = false;
       if (!picked.temporary) {
@@ -263,8 +352,8 @@ class _VaultPageState extends State<VaultPage> {
         context,
         title: 'Encrypting into ${_s.name}',
         start: () => _s.import_(
-          sources: picked!.paths,
-          parent: _parent,
+          sources: picked.paths,
+          parent: into ?? _parent,
           deleteOriginals: deleteOriginals,
         ),
         summary: (o) {
@@ -275,7 +364,7 @@ class _VaultPageState extends State<VaultPage> {
             return '$what Each file was read back and checked, then the '
                 'originals were deleted.';
           }
-          return picked!.temporary
+          return picked.temporary
               ? '$what The originals are still where they were; delete them '
                     'yourself if you only want the encrypted copy.'
               : what;
@@ -444,6 +533,91 @@ class _VaultPageState extends State<VaultPage> {
     _reload();
   }
 
+  /// Cut or Copy: the items wait until "Move here" or "Paste here".
+  void _pickUp(List<EntryInfo> items, {required bool cut}) {
+    if (items.isEmpty) return;
+    setState(() {
+      _clip = _Clip(
+        items.map((e) => e.id).toList(),
+        items.map((e) => e.name).toList(),
+        cut: cut,
+      );
+      _selected.clear();
+    });
+  }
+
+  Future<void> _paste() async {
+    final clip = _clip;
+    if (clip == null) return;
+    final here = _crumbs.isEmpty ? _s.name : _crumbs.last.name;
+    final ok = await guarded(
+      context,
+      () async {
+        if (clip.cut) {
+          await _s.moveTo(ids: clip.ids, parent: _parent);
+        } else {
+          await _s.copyTo(ids: clip.ids, parent: _parent);
+        }
+        return true;
+      },
+      success: (_) => '${clip.cut ? 'Moved' : 'Copied'} ${clip.what} to $here.',
+    );
+    if (!mounted) return;
+    if (ok == true) setState(() => _clip = null);
+    _reload();
+  }
+
+  /// A copy next to the original, named "name (2)".
+  Future<void> _duplicate(List<EntryInfo> items) async {
+    if (items.isEmpty) return;
+    await guarded(
+      context,
+      () => _s.copyTo(ids: items.map((e) => e.id).toList(), parent: _parent),
+      success: (_) => items.length == 1
+          ? 'Made a copy of "${items.first.name}".'
+          : 'Made copies of ${items.length} items.',
+    );
+    if (mounted) setState(_selected.clear);
+    _reload();
+  }
+
+  /// Dropped onto a folder or a breadcrumb.
+  Future<void> _dropInto(_Drag d, String? parent, String name) async {
+    await guarded(
+      context,
+      () => _s.moveTo(ids: d.ids, parent: parent),
+      success: (_) => d.ids.length == 1
+          ? 'Moved "${d.names.first}" to $name.'
+          : 'Moved ${d.ids.length} items to $name.',
+    );
+    if (mounted) setState(_selected.clear);
+    _reload();
+  }
+
+  Future<void> _folderDetails(EntryInfo e) async {
+    final t = await guarded(context, () => _s.folderTotals(id: e.id));
+    if (t == null || !mounted) return;
+    await showDetailRows(
+      context,
+      title: 'Details',
+      rows: [
+        ('Name', e.name),
+        (
+          'In',
+          _crumbs.isEmpty
+              ? 'Top level'
+              : _crumbs.map((c) => c.name).join(' / '),
+        ),
+        (
+          'Contains',
+          '${plural(t.files, 'file')} in ${plural(t.folders, 'folder')}',
+        ),
+        ('Size', formatBytes(t.bytes.toInt())),
+        if (e.modified > 0) ('Modified', relativeTime(e.modified)),
+      ],
+    );
+  }
+
   Future<void> _seal(List<EntryInfo> items) async {
     if (items.isEmpty) return;
     await sealFromVault(
@@ -475,6 +649,29 @@ class _VaultPageState extends State<VaultPage> {
                   subtitle: Text(_subtitle(e)),
                 ),
                 const Divider(height: 1),
+                if (e.kind == EntryKind.folder) ...[
+                  ListTile(
+                    key: const Key('item-open'),
+                    leading: const Icon(Icons.folder_open_outlined),
+                    title: const Text('Open'),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _open(e);
+                    },
+                  ),
+                  ListTile(
+                    key: const Key('item-add-here'),
+                    leading: const Icon(Icons.upload_file),
+                    title: const Text('Add files here'),
+                    onTap: () => run(() => _import(folder: false, into: e.id)),
+                  ),
+                  ListTile(
+                    key: const Key('item-new-folder'),
+                    leading: const Icon(Icons.create_new_folder_outlined),
+                    title: const Text('New folder inside'),
+                    onTap: () => run(() => _newFolder(inside: e)),
+                  ),
+                ],
                 if (e.kind == EntryKind.file) ...[
                   ListTile(
                     key: const Key('item-view'),
@@ -511,17 +708,45 @@ class _VaultPageState extends State<VaultPage> {
                 ),
                 ListTile(
                   leading: const Icon(Icons.inventory_2_outlined),
-                  title: const Text('Seal into a package…'),
+                  title: const Text('Seal a copy to share…'),
                   onTap: () => run(() => _seal([e])),
                 ),
                 ListTile(
+                  key: const Key('item-rename'),
                   leading: const Icon(Icons.drive_file_rename_outline),
                   title: const Text('Rename'),
                   onTap: () => run(() => _rename(e)),
                 ),
                 ListTile(
+                  key: const Key('item-cut'),
+                  leading: const Icon(Icons.content_cut),
+                  title: const Text('Cut'),
+                  subtitle: const Text('Then open a folder and tap Move here'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _pickUp([e], cut: true);
+                  },
+                ),
+                ListTile(
+                  key: const Key('item-copy'),
+                  leading: const Icon(Icons.content_copy),
+                  title: const Text('Copy'),
+                  subtitle: const Text('Then open a folder and tap Paste here'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _pickUp([e], cut: false);
+                  },
+                ),
+                ListTile(
+                  key: const Key('item-duplicate'),
+                  leading: const Icon(Icons.copy_all_outlined),
+                  title: const Text('Make a copy'),
+                  onTap: () => run(() => _duplicate([e])),
+                ),
+                ListTile(
+                  key: const Key('item-move'),
                   leading: const Icon(Icons.drive_file_move_outlined),
-                  title: const Text('Move'),
+                  title: const Text('Move to…'),
                   onTap: () => run(() => _move([e])),
                 ),
                 ListTile(
@@ -537,11 +762,13 @@ class _VaultPageState extends State<VaultPage> {
                   leading: const Icon(Icons.info_outline),
                   title: const Text('Details'),
                   onTap: () => run(
-                    () => showEntryDetails(
-                      context,
-                      e,
-                      location: _crumbs.map((c) => c.name).join(' / '),
-                    ),
+                    () => e.kind == EntryKind.folder
+                        ? _folderDetails(e)
+                        : showEntryDetails(
+                            context,
+                            e,
+                            location: _crumbs.map((c) => c.name).join(' / '),
+                          ),
                   ),
                 ),
               ],
@@ -698,6 +925,7 @@ class _VaultPageState extends State<VaultPage> {
           '${plural(t.files, 'file')} in ${plural(t.folders, 'folder')}, '
           '${formatBytes(t.bytes.toInt())}.\n'
           '${created > 0 ? 'Created ${relativeTime(created)}.\n' : ''}'
+          'Kind: ${_s.isSingle ? 'Vault (one encrypted file)' : 'Vault LFS (a folder, for large files)'}\n'
           'Location: ${_s.path}\n\n'
           'Everything is encrypted with AES-256-GCM under keys wrapped by '
           'ML-KEM-1024 + ECDH P-384. File names, sizes and folder structure '
@@ -727,6 +955,58 @@ class _VaultPageState extends State<VaultPage> {
 
   Future<void> _lock() async {
     await AppScope.read(context).lock(_s.path);
+  }
+
+  /// Writes a copy as the other kind (Vault <-> Vault LFS) and lists it.
+  Future<void> _convert() async {
+    final app = AppScope.read(context);
+    final toLfs = _s.isSingle;
+    final ok = await confirm(
+      context,
+      title: toLfs ? 'Make a Vault LFS copy?' : 'Make a single-file copy?',
+      message: toLfs
+          ? 'A Vault LFS is a folder that encrypts each file on its own, so '
+                'large files stay fast to add and change. The copy opens '
+                'with the same password, recovery phrase and other unlock '
+                'methods. This vault file stays as it is; delete it yourself '
+                'once you are happy with the copy.'
+          : 'A Vault is one encrypted file that is easy to move, upload or '
+                'send. Every change rewrites the whole file, so it suits '
+                'smaller collections. The copy opens with the same password, '
+                'recovery phrase and other unlock methods. This folder stays '
+                'as it is; delete it yourself once you are happy with the '
+                'copy.',
+      action: 'Choose where',
+    );
+    if (!ok || !mounted) return;
+    if (!await ensureStorageAccess(context) || !mounted) return;
+    String? out;
+    if (toLfs) {
+      final dir = await app.whilePicking(
+        () => app.files.pickFolder(title: 'Put the Vault LFS here'),
+      );
+      if (dir == null) return;
+      out = PlatformFiles.uniquePath(dir, '${_s.name} LFS');
+    } else {
+      out = await app.whilePicking(
+        () => app.files.pickSaveFile('${_s.name}.atropos'),
+      );
+    }
+    if (out == null || !mounted) return;
+    final target = out;
+    final done = await runTask(
+      context,
+      title: toLfs ? 'Making a Vault LFS copy' : 'Making a single-file copy',
+      start: () => _s.convert(out: target),
+      summary: (_) =>
+          'The copy is at $target and is now on your vault list. The '
+          'original is unchanged.',
+    );
+    if (done == null) return;
+    try {
+      await app.store.remember(target);
+    } catch (_) {}
+    await app.refreshVaults();
   }
 
   // ---- build -------------------------------------------------------------
@@ -789,12 +1069,24 @@ class _VaultPageState extends State<VaultPage> {
                     onPressed: () => _export(sel),
                   ),
                   IconButton(
-                    tooltip: 'Seal into a package',
+                    tooltip: 'Seal a copy to share',
                     icon: const Icon(Icons.inventory_2_outlined),
                     onPressed: () => _seal(sel),
                   ),
                   IconButton(
-                    tooltip: 'Move',
+                    key: const Key('selection-cut'),
+                    tooltip: 'Cut',
+                    icon: const Icon(Icons.content_cut),
+                    onPressed: () => _pickUp(sel, cut: true),
+                  ),
+                  IconButton(
+                    key: const Key('selection-copy'),
+                    tooltip: 'Copy',
+                    icon: const Icon(Icons.content_copy),
+                    onPressed: () => _pickUp(sel, cut: false),
+                  ),
+                  IconButton(
+                    tooltip: 'Move to…',
                     icon: const Icon(Icons.drive_file_move_outlined),
                     onPressed: () => _move(sel),
                   ),
@@ -848,43 +1140,56 @@ class _VaultPageState extends State<VaultPage> {
                         _parent,
                       ).then((ok) => ok ? _reload() : null),
                       'browse' => browsePackageFlow(context, vault: _s),
+                      'convert' => _convert(),
                       _ => null,
                     },
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(value: 'info', child: Text('Vault info')),
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(
+                        value: 'info',
+                        child: Text('Vault info'),
+                      ),
                       PopupMenuItem(
+                        key: const Key('vault-convert'),
+                        value: 'convert',
+                        child: Text(
+                          _s.isSingle
+                              ? 'Make a Vault LFS copy (for large files)'
+                              : 'Make a single-file copy',
+                        ),
+                      ),
+                      const PopupMenuItem(
                         value: 'browse',
-                        child: Text('View a package'),
+                        child: Text('Look inside a sealed file'),
                       ),
-                      PopupMenuItem(
+                      const PopupMenuItem(
                         value: 'package',
-                        child: Text('Add a package to this vault'),
+                        child: Text('Add a sealed file here'),
                       ),
-                      PopupMenuItem(
+                      const PopupMenuItem(
                         value: 'password',
                         child: Text('Change password'),
                       ),
-                      PopupMenuItem(
+                      const PopupMenuItem(
                         value: 'strength',
                         child: Text('Password protection'),
                       ),
-                      PopupMenuItem(
+                      const PopupMenuItem(
                         value: 'recovery',
                         child: Text('New recovery phrase'),
                       ),
-                      PopupMenuItem(
+                      const PopupMenuItem(
                         value: 'biometric',
                         child: Text('Fingerprint unlock'),
                       ),
-                      PopupMenuItem(
+                      const PopupMenuItem(
                         value: 'cards',
                         child: Text('Security cards'),
                       ),
-                      PopupMenuItem(
+                      const PopupMenuItem(
                         value: 'check',
                         child: Text('Check and repair'),
                       ),
-                      PopupMenuItem(
+                      const PopupMenuItem(
                         value: 'rekey',
                         child: Text('Re-key vault'),
                       ),
@@ -900,68 +1205,222 @@ class _VaultPageState extends State<VaultPage> {
                 icon: const Icon(Icons.add),
                 label: const Text('Add'),
               ),
-        body: Column(
-          children: [
-            DamagedBanner(session: _s),
-            _Breadcrumbs(
-              root: _s.name,
-              crumbs: _crumbs.map((c) => c.name).toList(),
-              onTap: _goTo,
-            ),
-            const Divider(height: 1),
-            Expanded(
-              child: _loading
-                  ? const Center(child: CircularProgressIndicator())
-                  : _entries.isEmpty
-                  ? _Empty(isRoot: _crumbs.isEmpty)
-                  : RefreshIndicator(
-                      onRefresh: _reload,
-                      child: ListView.builder(
-                        padding: const EdgeInsets.only(bottom: 88),
-                        itemCount: _entries.length,
-                        itemBuilder: (_, i) {
-                          final e = _entries[i];
-                          final on = _selected.contains(e.id);
-                          return GestureDetector(
-                            onSecondaryTap: selecting
-                                ? null
-                                : () => _details(e),
-                            child: ListTile(
-                              key: Key('entry-${e.name}'),
-                              selected: on,
-                              selectedTileColor: scheme.secondaryContainer
-                                  .withValues(alpha: 0.5),
-                              leading: selecting
-                                  ? Checkbox(
-                                      value: on,
-                                      onChanged: (_) => _toggle(e),
-                                    )
-                                  : _iconFor(e, scheme),
-                              title: Text(
-                                e.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+        bottomNavigationBar: _clip == null ? null : _pasteBar(scheme),
+        body: _dropZone(
+          scheme,
+          Column(
+            children: [
+              DamagedBanner(session: _s),
+              _Breadcrumbs(
+                root: _s.name,
+                crumbs: _crumbs.map((c) => c.name).toList(),
+                onTap: _goTo,
+                onDrop: (depth, d) => _dropInto(
+                  d,
+                  depth == 0 ? null : _crumbs[depth - 1].id,
+                  depth == 0 ? _s.name : _crumbs[depth - 1].name,
+                ),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: _loading
+                    ? const Center(child: CircularProgressIndicator())
+                    : _entries.isEmpty
+                    ? _Empty(isRoot: _crumbs.isEmpty)
+                    : RefreshIndicator(
+                        onRefresh: _reload,
+                        child: ListView.builder(
+                          padding: const EdgeInsets.only(bottom: 88),
+                          itemCount: _entries.length,
+                          itemBuilder: (_, i) {
+                            final e = _entries[i];
+                            final on = _selected.contains(e.id);
+                            return _dragAndDrop(
+                              e,
+                              scheme,
+                              GestureDetector(
+                                onSecondaryTap: selecting
+                                    ? null
+                                    : () => _details(e),
+                                child: ListTile(
+                                  key: Key('entry-${e.name}'),
+                                  selected: on,
+                                  selectedTileColor: scheme.secondaryContainer
+                                      .withValues(alpha: 0.5),
+                                  leading: selecting
+                                      ? Checkbox(
+                                          value: on,
+                                          onChanged: (_) => _toggle(e),
+                                        )
+                                      : _iconFor(e, scheme),
+                                  title: Text(
+                                    e.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  subtitle: Text(_subtitle(e)),
+                                  onTap: () => _open(e),
+                                  // On phones a long press picks the item up to
+                                  // drag; letting go without moving opens the menu.
+                                  onLongPress: _desktop || selecting
+                                      ? () =>
+                                            selecting ? _toggle(e) : _details(e)
+                                      : null,
+                                  trailing: selecting
+                                      ? null
+                                      : IconButton(
+                                          key: Key('more-${e.name}'),
+                                          tooltip: 'More',
+                                          icon: const Icon(Icons.more_vert),
+                                          onPressed: () => _details(e),
+                                        ),
+                                ),
                               ),
-                              subtitle: Text(_subtitle(e)),
-                              onTap: () => _open(e),
-                              onLongPress: () =>
-                                  selecting ? _toggle(e) : _details(e),
-                              trailing: selecting
-                                  ? null
-                                  : IconButton(
-                                      key: Key('more-${e.name}'),
-                                      tooltip: 'More',
-                                      icon: const Icon(Icons.more_vert),
-                                      onPressed: () => _details(e),
-                                    ),
-                            ),
-                          );
-                        },
+                            );
+                          },
+                        ),
                       ),
-                    ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _pasteBar(ColorScheme scheme) {
+    final clip = _clip!;
+    return Material(
+      color: scheme.secondaryContainer,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+          child: Row(
+            children: [
+              Icon(clip.cut ? Icons.content_cut : Icons.content_copy, size: 20),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  '${clip.cut ? 'Moving' : 'Copying'} ${clip.what}. Open the '
+                  'folder it should go to.',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              TextButton(
+                onPressed: () => setState(() => _clip = null),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                key: const Key('paste-here'),
+                onPressed: _paste,
+                child: Text(clip.cut ? 'Move here' : 'Paste here'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Desktop: files dropped from the file manager are added here.
+  Widget _dropZone(ColorScheme scheme, Widget child) {
+    if (!_desktop) return child;
+    return DropTarget(
+      onDragEntered: (_) => setState(() => _dropHover = true),
+      onDragExited: (_) => setState(() => _dropHover = false),
+      onDragDone: _dropped,
+      child: Stack(
+        children: [
+          child,
+          if (_dropHover)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Container(
+                  margin: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: scheme.primaryContainer.withValues(alpha: 0.6),
+                    border: Border.all(color: scheme.primary, width: 2),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    'Drop to encrypt into '
+                    '${_crumbs.isEmpty ? _s.name : _crumbs.last.name}',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+              ),
             ),
+        ],
+      ),
+    );
+  }
+
+  /// Every item can be dragged (on phones after a long press); folders
+  /// take drops.
+  Widget _dragAndDrop(EntryInfo e, ColorScheme scheme, Widget tile) {
+    final items = _selected.contains(e.id) ? _selectedEntries : [e];
+    final data = _Drag(
+      items.map((x) => x.id).toList(),
+      items.map((x) => x.name).toList(),
+    );
+    final feedback = Material(
+      elevation: 6,
+      borderRadius: BorderRadius.circular(8),
+      color: scheme.surfaceContainerHigh,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _iconFor(e, scheme),
+            const SizedBox(width: 8),
+            Text(items.length == 1 ? e.name : '${items.length} items'),
           ],
         ),
+      ),
+    );
+    Widget child = tile;
+    if (e.kind == EntryKind.folder) {
+      child = DragTarget<_Drag>(
+        onWillAcceptWithDetails: (d) => !d.data.ids.contains(e.id),
+        onAcceptWithDetails: (d) => _dropInto(d.data, e.id, e.name),
+        builder: (context, candidates, _) => candidates.isEmpty
+            ? tile
+            : Material(
+                color: scheme.primaryContainer.withValues(alpha: 0.6),
+                shape: Border.all(color: scheme.primary, width: 2),
+                child: tile,
+              ),
+      );
+    }
+    if (_desktop) {
+      return Draggable<_Drag>(
+        data: data,
+        dragAnchorStrategy: pointerDragAnchorStrategy,
+        feedback: feedback,
+        childWhenDragging: Opacity(opacity: 0.4, child: child),
+        child: child,
+      );
+    }
+    Offset? down;
+    return Listener(
+      onPointerDown: (p) => down = p.position,
+      child: LongPressDraggable<_Drag>(
+        data: data,
+        dragAnchorStrategy: pointerDragAnchorStrategy,
+        feedback: feedback,
+        childWhenDragging: Opacity(opacity: 0.4, child: child),
+        onDraggableCanceled: (_, offset) {
+          // Let go where it was picked up: that was a plain long press.
+          final start = down;
+          if (start != null && (offset - start).distance < 24) {
+            _selected.isNotEmpty ? _toggle(e) : _details(e);
+          }
+        },
+        child: child,
       ),
     );
   }
@@ -972,11 +1431,15 @@ class _Breadcrumbs extends StatelessWidget {
     required this.root,
     required this.crumbs,
     required this.onTap,
+    required this.onDrop,
   });
 
   final String root;
   final List<String> crumbs;
   final ValueChanged<int> onTap;
+
+  /// An item dragged onto the crumb at this depth (0 = the top level).
+  final void Function(int depth, _Drag d) onDrop;
 
   @override
   Widget build(BuildContext context) {
@@ -991,10 +1454,24 @@ class _Breadcrumbs extends StatelessWidget {
         separatorBuilder: (_, _) => const Icon(Icons.chevron_left, size: 18),
         itemBuilder: (_, i) {
           final depth = names.length - 1 - i;
+          final button = TextButton(
+            key: Key('crumb-$depth'),
+            onPressed: depth == crumbs.length ? null : () => onTap(depth),
+            child: Text(names[depth]),
+          );
+          if (depth == crumbs.length) return Center(child: button);
           return Center(
-            child: TextButton(
-              onPressed: depth == crumbs.length ? null : () => onTap(depth),
-              child: Text(names[depth]),
+            child: DragTarget<_Drag>(
+              onAcceptWithDetails: (d) => onDrop(depth, d.data),
+              builder: (context, candidates, _) => candidates.isEmpty
+                  ? button
+                  : DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: button,
+                    ),
             ),
           );
         },
@@ -1073,6 +1550,32 @@ class _FolderChooserState extends State<_FolderChooser> {
     );
   }
 
+  /// Makes a folder where the chooser is and goes into it.
+  Future<void> _newFolder() async {
+    final name = await promptText(
+      context,
+      title: 'New folder',
+      label: 'Name',
+      initial: 'New folder',
+      action: 'Create',
+    );
+    if (name == null || name.trim().isEmpty || !mounted) return;
+    final id = await guarded(
+      context,
+      () => widget.session.createFolder(
+        parent: _path.isEmpty ? null : _path.last.id,
+        name: name.trim(),
+      ),
+    );
+    if (id == null || !mounted) return;
+    final list = await widget.session.list(
+      parent: _path.isEmpty ? null : _path.last.id,
+    );
+    final made = list.where((e) => e.id == id).firstOrNull;
+    _path.add(_Crumb(id, made?.name ?? name.trim()));
+    await _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     final here = _path.isEmpty ? _Crumb('', widget.session.name) : _path.last;
@@ -1113,11 +1616,18 @@ class _FolderChooserState extends State<_FolderChooser> {
               ),
       ),
       actions: [
+        TextButton.icon(
+          key: const Key('chooser-new-folder'),
+          onPressed: _newFolder,
+          icon: const Icon(Icons.create_new_folder_outlined),
+          label: const Text('New folder'),
+        ),
         TextButton(
           onPressed: () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
         FilledButton(
+          key: const Key('chooser-move-here'),
           onPressed: () => Navigator.pop(context, here),
           child: const Text('Move here'),
         ),

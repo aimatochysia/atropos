@@ -20,6 +20,7 @@ class _CreateVaultPageState extends State<CreateVaultPage> {
   final _password = SecretInput();
   final _again = SecretInput();
   String? _location;
+  bool _lfs = false;
   Strength? _strength;
   String? _mismatch;
   String? _error;
@@ -73,6 +74,7 @@ class _CreateVaultPageState extends State<CreateVaultPage> {
         parentDir: _location!,
         name: _name.text.trim(),
         password: _password,
+        lfs: _lfs,
       );
       _password.clear();
       _again.clear();
@@ -109,14 +111,57 @@ class _CreateVaultPageState extends State<CreateVaultPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          SegmentedButton<bool>(
+            key: const Key('vault-kind'),
+            segments: const [
+              ButtonSegment(
+                value: false,
+                icon: Icon(Icons.lock_outline),
+                label: Text('Vault'),
+              ),
+              ButtonSegment(
+                value: true,
+                icon: Icon(Icons.folder_outlined),
+                label: Text('Vault LFS'),
+              ),
+            ],
+            selected: {_lfs},
+            onSelectionChanged: _busy
+                ? null
+                : (v) => setState(() => _lfs = v.first),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _lfs
+                ? 'A folder that encrypts each file on its own, so very large '
+                      'files stay fast to add and change. Good for big photo '
+                      'or video collections, and for syncing with cloud '
+                      'drives or git.'
+                : 'One encrypted .atropos file, easy to move, upload or send. '
+                      'Every change rewrites the whole file, so it suits '
+                      'documents and smaller collections. Pick Vault LFS for '
+                      'many gigabytes.',
+            key: const Key('vault-kind-help'),
+            style: t.bodySmall,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Both kinds open with a password, a recovery phrase, fingerprint '
+            'unlock and security cards. You can make a copy as the other '
+            'kind later.',
+            style: t.bodySmall,
+          ),
+          const SizedBox(height: 12),
           TextField(
             key: const Key('vault-name'),
             controller: _name,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'Vault name',
-              helperText:
-                  'Becomes the folder name. Visible to anyone who '
-                  'sees the folder.',
+              helperText: _lfs
+                  ? 'Becomes the folder name. Visible to anyone who sees '
+                        'the folder.'
+                  : 'Becomes the file name (with .atropos). Visible to '
+                        'anyone who sees the file.',
             ),
             onChanged: (_) => setState(() {}),
           ),

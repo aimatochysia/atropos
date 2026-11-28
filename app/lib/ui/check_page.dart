@@ -489,7 +489,10 @@ Future<VaultSession?> rekeyFlow(BuildContext context, VaultSession s) async {
   final done = await showDialog<RekeyDone>(
     context: context,
     barrierDismissible: false,
-    builder: (_) => _RekeyDialog(session: s, password: pw),
+    builder: (_) => KeysProgressDialog(
+      title: 'Re-keying',
+      start: () => s.rekey(password: pw),
+    ),
   );
   pw.clear();
   if (done == null) return null;
@@ -506,16 +509,21 @@ Future<VaultSession?> rekeyFlow(BuildContext context, VaultSession s) async {
   return done.session;
 }
 
-class _RekeyDialog extends StatefulWidget {
-  const _RekeyDialog({required this.session, required this.password});
-  final VaultSession session;
-  final SecretInput password;
+/// Shows a re-key or upgrade running; pops with its result.
+class KeysProgressDialog extends StatefulWidget {
+  const KeysProgressDialog({
+    super.key,
+    required this.title,
+    required this.start,
+  });
+  final String title;
+  final Stream<RekeyEvent> Function() start;
 
   @override
-  State<_RekeyDialog> createState() => _RekeyDialogState();
+  State<KeysProgressDialog> createState() => _KeysProgressDialogState();
 }
 
-class _RekeyDialogState extends State<_RekeyDialog> {
+class _KeysProgressDialogState extends State<KeysProgressDialog> {
   StreamSubscription<RekeyEvent>? _sub;
   ProgressInfo? _p;
   String? _error;
@@ -523,7 +531,7 @@ class _RekeyDialogState extends State<_RekeyDialog> {
   @override
   void initState() {
     super.initState();
-    _sub = widget.session.rekey(password: widget.password).listen((e) {
+    _sub = widget.start().listen((e) {
       if (!mounted) return;
       final done = e.done();
       if (done != null) {
@@ -544,7 +552,7 @@ class _RekeyDialogState extends State<_RekeyDialog> {
   Widget build(BuildContext context) {
     final p = _p;
     return AlertDialog(
-      title: const Text('Re-keying'),
+      title: Text(widget.title),
       content: _error != null
           ? Text(_error!)
           : Column(

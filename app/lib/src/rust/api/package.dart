@@ -12,7 +12,7 @@ import 'secure_input.dart';
 import 'vault.dart';
 import 'viewer.dart';
 
-// These functions are ignored because they are not marked as `pub`: `close`, `closed`, `is_closed`, `parse_index`, `session`, `with`
+// These functions are ignored because they are not marked as `pub`: `close`, `closed`, `is_closed`, `not_found`, `parse_parent_path`, `parse_path`, `path_id`, `session`, `with_item`, `with`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `Inner`
 
 /// Opens a passphrase-locked package for browsing.
@@ -30,8 +30,33 @@ void closeAllPackages() =>
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PackageSession>>
 abstract class PackageSession implements RustOpaqueInterface {
+  /// Adds files and folders from disk into `parent`.
+  Stream<TaskEvent> addFiles({required List<String> sources, String? parent});
+
   /// Wipes the package key and every file opened from it.
   void close();
+
+  /// Copies everything into `vault` (inside `parent`), for turning a
+  /// single-file vault into a Vault LFS. The package is left as it is.
+  Stream<TaskEvent> copyIntoVault({
+    required VaultSession vault,
+    String? parent,
+  });
+
+  Future<void> copyTo({required List<String> ids, String? parent});
+
+  /// Creates a text file in `parent`. Returns its id.
+  Future<String> createFile({
+    String? parent,
+    required String name,
+    required String text,
+  });
+
+  /// Creates an empty folder in `parent` (None = top level). Returns its
+  /// id. Like every change, the package is written again and swapped in.
+  Future<String> createFolder({String? parent, required String name});
+
+  Future<void> delete({required List<String> ids});
 
   /// Writes one file of the package out, unencrypted, into `dest_dir`.
   /// Returns the path written (a free name, never overwriting).
@@ -42,6 +67,8 @@ abstract class PackageSession implements RustOpaqueInterface {
   /// Items directly inside `parent` (None = the top level), folders first.
   Future<List<EntryInfo>> list({String? parent, SortOrder? sort});
 
+  Future<void> moveTo({required List<String> ids, String? parent});
+
   /// The package file's name without `.atropos`.
   String get name;
 
@@ -49,6 +76,12 @@ abstract class PackageSession implements RustOpaqueInterface {
   /// `open_as` overrides what the file looks like (remembered per file
   /// type on this device, since a package cannot be changed).
   Future<FileViewer> openViewer({required String id, PreviewKind? openAs});
+
+  /// Where the package file is.
+  String get path;
+
+  /// Renames an item. Returns its new id (a folder's items move with it).
+  Future<String> rename({required String id, required String name});
 
   /// Saves the picture open in `viewer` with `edits` applied over file
   /// `id`, rewriting the package in place.
@@ -58,7 +91,18 @@ abstract class PackageSession implements RustOpaqueInterface {
     required List<ImageEdit> edits,
   });
 
+  /// Saves the picture open in `viewer` with `edits` applied as a new
+  /// file next to `id`. Returns the new file's id.
+  Future<String> saveEditedImageCopy({
+    required FileViewer viewer,
+    required String id,
+    required List<ImageEdit> edits,
+  });
+
   /// Saves edited text as the new contents of file `id`. The package is
   /// written again under the same lock and swapped in place.
   Future<void> saveText({required String id, required String text});
+
+  /// Files, folders and bytes inside folder `id` (None = everything).
+  Future<OutcomeInfo> totals({String? id});
 }

@@ -100,6 +100,7 @@ Future<String?> promptText(
           child: const Text('Cancel'),
         ),
         FilledButton(
+          key: const Key('prompt-ok'),
           onPressed: () => Navigator.pop(ctx, controller.text.trim()),
           child: Text(action),
         ),

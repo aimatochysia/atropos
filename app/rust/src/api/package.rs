@@ -8,11 +8,15 @@ use flutter_rust_bridge::frb;
 use zeroize::Zeroizing;
 
 use super::secure_input::SecretInput;
-use super::vault::{sort_entries, wrong_secret, EntryInfo, EntryKind, SortOrder, VaultSession};
+use super::vault::{
+    outcome_info, parse_parent, reporter, sort_entries, wrong_secret, EntryInfo, EntryKind,
+    OutcomeInfo, SortOrder, TaskEvent, VaultSession,
+};
 use super::viewer::{FileViewer, ImageEdit, PreviewKind, Viewers};
 use crate::error::{CoreError, CoreResult};
+use crate::frb_generated::StreamSink;
 use crate::vault::manifest::Kind;
-use crate::vault::package::{PackageKey, PackageReader};
+use crate::vault::package::{Destination, PackageKey, PackageReader};
 use crate::view;
 
 struct Inner {
@@ -47,6 +51,7 @@ static OPEN: Mutex<Vec<Weak<Inner>>> = Mutex::new(Vec::new());
 pub struct PackageSession {
     inner: Arc<Inner>,
     name: String,
+    path: String,
 }
 
 fn closed() -> CoreError {
@@ -67,7 +72,11 @@ fn session(path: &str, reader: PackageReader) -> PackageSession {
         .file_stem()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
-    PackageSession { inner, name }
+    PackageSession {
+        inner,
+        name,
+        path: path.to_string(),
+    }
 }
 
 /// Opens a passphrase-locked package for browsing.
@@ -95,16 +104,49 @@ impl VaultSession {
     }
 }
 
-fn parse_index(id: &str) -> CoreResult<usize> {
-    id.parse().map_err(|_| CoreError::InvalidInput {
+/// An item's id is its path inside the package, names joined by `/`
+/// (names never contain one).
+fn parse_path(id: &str) -> Vec<String> {
+    id.split('/').map(str::to_string).collect()
+}
+
+fn path_id(path: &[String]) -> String {
+    path.join("/")
+}
+
+fn parse_parent_path(parent: Option<String>) -> Vec<String> {
+    parent.map(|p| parse_path(&p)).unwrap_or_default()
+}
+
+fn not_found() -> CoreError {
+    CoreError::InvalidInput {
         message: "that item is not in the package".into(),
-    })
+    }
 }
 
 impl PackageSession {
     fn with<T>(&self, f: impl FnOnce(&mut PackageReader) -> CoreResult<T>) -> CoreResult<T> {
         let mut g = self.inner.reader.lock().unwrap_or_else(|e| e.into_inner());
         f(g.as_mut().ok_or_else(closed)?)
+    }
+
+    /// Runs `f` with the reader and the index of item `id`.
+    fn with_item<T>(
+        &self,
+        id: &str,
+        f: impl FnOnce(&mut PackageReader, usize) -> CoreResult<T>,
+    ) -> CoreResult<T> {
+        let path = parse_path(id);
+        self.with(|r| {
+            let i = r.find(&path).ok_or_else(not_found)?;
+            f(r, i)
+        })
+    }
+
+    /// Where the package file is.
+    #[frb(sync, getter)]
+    pub fn path(&self) -> String {
+        self.path.clone()
     }
 
     /// The package file's name without `.atropos`.
@@ -124,13 +166,13 @@ impl PackageSession {
         parent: Option<String>,
         sort: Option<SortOrder>,
     ) -> CoreResult<Vec<EntryInfo>> {
-        let parent = parent.map(|p| parse_index(&p)).transpose()?;
+        let base = parse_parent_path(parent);
         self.with(|r| {
             let items = r.items();
-            let base: &[String] = match parent {
-                Some(i) => &items.get(i).ok_or_else(closed)?.path,
-                None => &[],
-            };
+            if !base.is_empty() && !items.iter().any(|i| i.path == base) {
+                return Err(not_found());
+            }
+            let base = base.as_slice();
             let mut counts: HashMap<&[String], u32> = HashMap::new();
             for it in items {
                 if let Some((_, up)) = it.path.split_last() {
@@ -141,8 +183,8 @@ impl PackageSession {
                 .iter()
                 .enumerate()
                 .filter(|(_, it)| it.path.len() == base.len() + 1 && it.path.starts_with(base))
-                .map(|(i, it)| EntryInfo {
-                    id: i.to_string(),
+                .map(|(_, it)| EntryInfo {
+                    id: path_id(&it.path),
                     name: it.path.last().cloned().unwrap_or_default(),
                     kind: match it.kind {
                         Kind::File => EntryKind::File,
@@ -165,9 +207,8 @@ impl PackageSession {
     /// `open_as` overrides what the file looks like (remembered per file
     /// type on this device, since a package cannot be changed).
     pub fn open_viewer(&self, id: String, open_as: Option<PreviewKind>) -> CoreResult<FileViewer> {
-        let index = parse_index(&id)?;
-        let (name, data) = self.with(|r| {
-            let item = r.items().get(index).cloned().ok_or_else(closed)?;
+        let (name, data) = self.with_item(&id, |r, index| {
+            let item = r.items()[index].clone();
             if item.size > view::MAX_VIEW_BYTES {
                 return Err(CoreError::InvalidInput {
                     message: "this file is too large for the viewer".into(),
@@ -190,9 +231,8 @@ impl PackageSession {
     /// Saves edited text as the new contents of file `id`. The package is
     /// written again under the same lock and swapped in place.
     pub fn save_text(&self, id: String, text: String) -> CoreResult<()> {
-        let index = parse_index(&id)?;
         let text = Zeroizing::new(text);
-        self.with(|r| r.replace_file(index, text.as_bytes()))
+        self.with_item(&id, |r, index| r.replace_file(index, text.as_bytes()))
     }
 
     /// Saves the picture open in `viewer` with `edits` applied over file
@@ -203,17 +243,140 @@ impl PackageSession {
         id: String,
         edits: Vec<ImageEdit>,
     ) -> CoreResult<()> {
-        let index = parse_index(&id)?;
         let data = viewer.encode_edited(edits)?;
-        self.with(|r| r.replace_file(index, &data))
+        self.with_item(&id, |r, index| r.replace_file(index, &data))
+    }
+
+    /// Saves the picture open in `viewer` with `edits` applied as a new
+    /// file next to `id`. Returns the new file's id.
+    pub fn save_edited_image_copy(
+        &self,
+        viewer: &FileViewer,
+        id: String,
+        edits: Vec<ImageEdit>,
+    ) -> CoreResult<String> {
+        let data = Zeroizing::new(viewer.encode_edited(edits)?);
+        let path = parse_path(&id);
+        let (parent, name) = path
+            .split_last()
+            .map(|(n, p)| (p.to_vec(), n.clone()))
+            .ok_or_else(not_found)?;
+        let copy = super::viewer::copy_name(&name);
+        self.with(|r| r.create_file(&parent, &copy, &data))
+            .map(|p| path_id(&p))
+    }
+
+    /// Creates an empty folder in `parent` (None = top level). Returns its
+    /// id. Like every change, the package is written again and swapped in.
+    pub fn create_folder(&self, parent: Option<String>, name: String) -> CoreResult<String> {
+        let parent = parse_parent_path(parent);
+        self.with(|r| r.create_folder(&parent, &name))
+            .map(|p| path_id(&p))
+    }
+
+    /// Creates a text file in `parent`. Returns its id.
+    pub fn create_file(
+        &self,
+        parent: Option<String>,
+        name: String,
+        text: String,
+    ) -> CoreResult<String> {
+        let parent = parse_parent_path(parent);
+        let text = Zeroizing::new(text);
+        self.with(|r| r.create_file(&parent, &name, text.as_bytes()))
+            .map(|p| path_id(&p))
+    }
+
+    /// Adds files and folders from disk into `parent`.
+    pub fn add_files(
+        &self,
+        sources: Vec<String>,
+        parent: Option<String>,
+        sink: StreamSink<TaskEvent>,
+    ) -> CoreResult<()> {
+        let parent = parse_parent_path(parent);
+        let sources: Vec<std::path::PathBuf> = sources.into_iter().map(Into::into).collect();
+        let o = self.with(|r| r.add_from_disk(&parent, &sources, &mut reporter(&sink)))?;
+        let _ = sink.add(TaskEvent::Done(outcome_info(o)));
+        Ok(())
+    }
+
+    /// Renames an item. Returns its new id (a folder's items move with it).
+    pub fn rename(&self, id: String, name: String) -> CoreResult<String> {
+        let path = parse_path(&id);
+        self.with(|r| r.rename(&path, &name)).map(|p| path_id(&p))
+    }
+
+    pub fn move_to(&self, ids: Vec<String>, parent: Option<String>) -> CoreResult<()> {
+        let paths: Vec<Vec<String>> = ids.iter().map(|i| parse_path(i)).collect();
+        let parent = parse_parent_path(parent);
+        self.with(|r| r.move_to(&paths, &parent))
+    }
+
+    pub fn copy_to(&self, ids: Vec<String>, parent: Option<String>) -> CoreResult<()> {
+        let paths: Vec<Vec<String>> = ids.iter().map(|i| parse_path(i)).collect();
+        let parent = parse_parent_path(parent);
+        self.with(|r| r.copy_to(&paths, &parent))
+    }
+
+    pub fn delete(&self, ids: Vec<String>) -> CoreResult<()> {
+        let paths: Vec<Vec<String>> = ids.iter().map(|i| parse_path(i)).collect();
+        self.with(|r| r.delete(&paths))
+    }
+
+    /// Files, folders and bytes inside folder `id` (None = everything).
+    pub fn totals(&self, id: Option<String>) -> CoreResult<OutcomeInfo> {
+        let base = parse_parent_path(id);
+        self.with(|r| {
+            let mut o = OutcomeInfo {
+                files: 0,
+                folders: 0,
+                bytes: 0,
+                skipped: vec![],
+                originals_deleted: false,
+            };
+            for it in r.items() {
+                if it.path.len() <= base.len() || !it.path.starts_with(&base) {
+                    continue;
+                }
+                match it.kind {
+                    Kind::Dir => o.folders += 1,
+                    _ => {
+                        o.files += 1;
+                        o.bytes += it.size;
+                    }
+                }
+            }
+            Ok(o)
+        })
+    }
+
+    /// Copies everything into `vault` (inside `parent`), for turning a
+    /// single-file vault into a Vault LFS. The package is left as it is.
+    pub fn copy_into_vault(
+        &self,
+        vault: &VaultSession,
+        parent: Option<String>,
+        sink: StreamSink<TaskEvent>,
+    ) -> CoreResult<()> {
+        let parent = parse_parent(parent)?;
+        let o = self.with(|r| {
+            vault.with(|v| {
+                r.extract(
+                    Destination::Vault { vault: v, parent },
+                    &mut reporter(&sink),
+                )
+            })
+        })?;
+        let _ = sink.add(TaskEvent::Done(outcome_info(o)));
+        Ok(())
     }
 
     /// Writes one file of the package out, unencrypted, into `dest_dir`.
     /// Returns the path written (a free name, never overwriting).
     pub fn extract_file(&self, id: String, dest_dir: String) -> CoreResult<String> {
-        let index = parse_index(&id)?;
-        self.with(|r| {
-            let item = r.items().get(index).cloned().ok_or_else(closed)?;
+        self.with_item(&id, |r, index| {
+            let item = r.items()[index].clone();
             if item.kind != Kind::File {
                 return Err(CoreError::InvalidInput {
                     message: "only files can be extracted one at a time".into(),

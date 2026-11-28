@@ -142,8 +142,12 @@ pub fn list_vaults(config_dir: String) -> Vec<KnownVault> {
 
 pub fn remember_vault(config_dir: String, path: String) -> CoreResult<()> {
     let mut v: Vec<KnownVault> = read(&config_dir, VAULTS);
-    let name = Path::new(&path)
-        .file_name()
+    let p = Path::new(&path);
+    // A single-file vault is named without its ".atropos".
+    let single = p
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("atropos"));
+    let name = if single { p.file_stem() } else { p.file_name() }
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| path.clone());
     let sort = v

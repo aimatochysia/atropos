@@ -6,9 +6,11 @@ import '../core/crypto_service.dart';
 import '../core/format.dart';
 import '../src/rust/api/vault.dart' as core;
 import '../state/app_controller.dart';
+import 'check_page.dart' show KeysProgressDialog;
 import 'create_vault_page.dart';
 import 'package_browser_page.dart';
-import 'package_flows.dart';
+import 'recovery_page.dart';
+import 'secret_dialog.dart';
 import 'settings_page.dart';
 import 'storage_access.dart';
 import 'unlock_page.dart';
@@ -25,7 +27,43 @@ class HomePage extends StatelessWidget {
 
   Future<void> _addExisting(BuildContext context) async {
     final app = AppScope.read(context);
-    if (!await ensureStorageAccess(context)) return;
+    final kind = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              key: const Key('open-vault-file'),
+              leading: const Icon(Icons.lock_outline),
+              title: const Text('A vault file (.atropos)'),
+              onTap: () => Navigator.pop(ctx, 'file'),
+            ),
+            ListTile(
+              key: const Key('open-vault-folder'),
+              leading: const Icon(Icons.folder_outlined),
+              title: const Text('A Vault LFS folder'),
+              onTap: () => Navigator.pop(ctx, 'folder'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (kind == null || !context.mounted) return;
+    if (!await ensureStorageAccess(context) || !context.mounted) return;
+    if (kind == 'file') {
+      final picked = await app.whilePicking(app.files.pickFileInPlace);
+      if (picked == null || !context.mounted) return;
+      if (picked.temporary) {
+        await picked.cleanUp();
+        if (!context.mounted) return;
+        // A copy would leave changes behind in the cache: open in place only.
+        await browsePackageFlow(context);
+        return;
+      }
+      await openAtroposFile(context, picked.paths.first);
+      return;
+    }
     final dir = await app.whilePicking(
       () => app.files.pickFolder(title: 'Open vault'),
     );
@@ -45,9 +83,14 @@ class HomePage extends StatelessWidget {
     _openVault(context, dir, _name(dir));
   }
 
-  static String _name(String path) =>
-      path.split(RegExp(r'[\\/]')).where((p) => p.isNotEmpty).lastOrNull ??
-      path;
+  static String _name(String path) {
+    final n =
+        path.split(RegExp(r'[\\/]')).where((p) => p.isNotEmpty).lastOrNull ??
+        path;
+    return n.toLowerCase().endsWith('.atropos')
+        ? n.substring(0, n.length - 8)
+        : n;
+  }
 
   static void _openVault(BuildContext context, String path, String name) {
     final app = AppScope.read(context);
@@ -113,25 +156,26 @@ class HomePage extends StatelessWidget {
                   key: const Key('add-existing'),
                   onPressed: () => _addExisting(context),
                   icon: const Icon(Icons.folder_open_outlined),
-                  label: const Text('Open an existing vault folder'),
+                  label: const Text('Open an existing vault'),
                 ),
                 if (app.packages.isNotEmpty) ...[
-                  const _Header('Recent packages'),
+                  const _Header('Older .atropos files'),
                   Card(
                     child: Column(
                       children: [
                         for (final p in app.packages)
                           ListTile(
                             key: Key('recent-${p.name}'),
-                            leading: const Icon(Icons.inventory_2_outlined),
+                            leading: const Icon(Icons.upgrade),
                             title: Text(p.name),
                             subtitle: Text(
-                              p.lastOpened > 0
-                                  ? 'Opened ${relativeTime(p.lastOpened)}'
-                                  : 'Package',
+                              [
+                                'Older format: tap to upgrade it to a vault',
+                                if (p.lastOpened > 0)
+                                  'opened ${relativeTime(p.lastOpened)}',
+                              ].join(', '),
                             ),
-                            onTap: () =>
-                                browsePackageFlow(context, path: p.path),
+                            onTap: () => openAtroposFile(context, p.path),
                             trailing: IconButton(
                               key: Key('forget-${p.name}'),
                               tooltip: 'Remove from this list',
@@ -143,45 +187,6 @@ class HomePage extends StatelessWidget {
                     ),
                   ),
                 ],
-                const _Header('Packages'),
-                Card(
-                  child: Column(
-                    children: [
-                      ListTile(
-                        key: const Key('seal-files'),
-                        leading: const Icon(Icons.inventory_2_outlined),
-                        title: const Text('Seal files into a package'),
-                        subtitle: const Text(
-                          'One encrypted .atropos file, opened with a '
-                          'passphrase. Good for sending or uploading.',
-                        ),
-                        onTap: () => sealFilesFromDisk(context),
-                      ),
-                      const Divider(height: 1),
-                      ListTile(
-                        key: const Key('browse-package'),
-                        leading: const Icon(Icons.inventory_2_outlined),
-                        title: const Text('Open a package'),
-                        subtitle: const Text(
-                          'Look at its files inside Atropos. Nothing is '
-                          'written to disk.',
-                        ),
-                        onTap: () => browsePackageFlow(context),
-                      ),
-                      const Divider(height: 1),
-                      ListTile(
-                        key: const Key('extract-package'),
-                        leading: const Icon(Icons.unarchive_outlined),
-                        title: const Text('Extract a package'),
-                        subtitle: const Text(
-                          'Decrypt a passphrase-locked package into a '
-                          'folder, unencrypted.',
-                        ),
-                        onTap: () => extractPackageToDisk(context),
-                      ),
-                    ],
-                  ),
-                ),
               ],
             ),
     );
@@ -203,7 +208,9 @@ class _VaultTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = AppScope.read(context);
     final scheme = Theme.of(context).colorScheme;
-    final exists = Directory(vault.path).existsSync();
+    final type = FileSystemEntity.typeSync(vault.path);
+    final exists = type != FileSystemEntityType.notFound;
+    final lfs = type == FileSystemEntityType.directory;
     return Card(
       child: ListTile(
         key: Key('vault-${vault.name}'),
@@ -211,7 +218,26 @@ class _VaultTile extends StatelessWidget {
           open ? Icons.lock_open : Icons.lock_outline,
           color: open ? scheme.tertiary : scheme.primary,
         ),
-        title: Text(vault.name),
+        title: Row(
+          children: [
+            Flexible(child: Text(vault.name, overflow: TextOverflow.ellipsis)),
+            if (lfs) ...[
+              const SizedBox(width: 8),
+              Container(
+                key: Key('lfs-${vault.name}'),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                decoration: BoxDecoration(
+                  color: scheme.secondaryContainer,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  'LFS',
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+              ),
+            ],
+          ],
+        ),
         subtitle: Text(
           [
             vault.path,
@@ -233,8 +259,8 @@ class _VaultTile extends StatelessWidget {
                 context,
                 title: 'Remove "${vault.name}" from the list?',
                 message:
-                    'The vault folder and its files are not touched. You can '
-                    'add it again with "Open an existing vault folder".',
+                    'The vault and its files are not touched. You can add '
+                    'it again with "Open an existing vault".',
                 action: 'Remove',
               );
               if (ok) await app.forget(vault.path);
@@ -277,10 +303,13 @@ class _Intro extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             const Text(
-              'A vault is a normal folder full of encrypted pieces. Put it on '
-              'a USB stick, a cloud drive or in a git repository: without your '
-              'password or recovery phrase nobody can see the files, their '
-              'names or how big they are.\n\n'
+              'A vault keeps your files encrypted. Without your password, '
+              'recovery phrase, fingerprint or security card nobody can see '
+              'the files, their names or how big they are.\n\n'
+              'A Vault is one .atropos file: easy to copy, upload or send. '
+              'A Vault LFS is a folder that encrypts each file on its own, '
+              'so very large files stay fast. Put either on a USB stick, a '
+              'cloud drive or in a git repository.\n\n'
               'Encryption: ML-KEM-1024 + ECDH P-384 key wrapping, AES-256-GCM, '
               'Argon2id for the password.',
             ),
@@ -306,4 +335,96 @@ class _Header extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Opens an `.atropos` file picked or listed on Home: a vault is unlocked,
+/// an older passphrase file is offered an upgrade, and anything else (a
+/// file sealed to a vault) is browsed.
+Future<void> openAtroposFile(BuildContext context, String path) async {
+  final app = AppScope.read(context);
+  if (!File(path).existsSync()) {
+    final forget = await confirm(
+      context,
+      title: 'File not found',
+      message:
+          'It may have been moved, renamed or deleted, or its drive is not '
+          'connected. Remove it from the list?',
+      action: 'Remove',
+    );
+    if (forget) await app.forgetPackage(path);
+    return;
+  }
+  if (core.isVault(path: path)) {
+    await app.store.remember(path);
+    await app.forgetPackage(path);
+    await app.refreshVaults();
+    if (!context.mounted) return;
+    HomePage._openVault(context, path, HomePage._name(path));
+    return;
+  }
+  if (!core.isOldPackage(path: path)) {
+    await browsePackageFlow(context, path: path);
+    return;
+  }
+  final choice = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Upgrade to a vault?'),
+      content: const Text(
+        'This file was made by an older Atropos. Upgrading turns it into a '
+        'full vault in place: its passphrase becomes the vault password, '
+        'and it gets a recovery phrase, fingerprint unlock and security '
+        'cards. Older versions of Atropos cannot open it afterwards.',
+      ),
+      actions: [
+        TextButton(
+          key: const Key('just-look'),
+          onPressed: () => Navigator.pop(ctx, 'look'),
+          child: const Text('Just look inside'),
+        ),
+        FilledButton(
+          key: const Key('upgrade-go'),
+          onPressed: () => Navigator.pop(ctx, 'upgrade'),
+          child: const Text('Upgrade'),
+        ),
+      ],
+    ),
+  );
+  if (choice == null || !context.mounted) return;
+  if (choice == 'look') {
+    await browsePackageFlow(context, path: path);
+    return;
+  }
+  final pass = await askSecret(
+    context,
+    title: 'Passphrase of this file',
+    label: 'Passphrase',
+    action: 'Upgrade',
+  );
+  if (pass == null || !context.mounted) return;
+  final done = await showDialog<core.RekeyDone>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => KeysProgressDialog(
+      title: 'Upgrading',
+      start: () => core.upgradePackage(path: path, passphrase: pass),
+    ),
+  );
+  pass.clear();
+  if (done == null || !context.mounted) return;
+  await app.forgetPackage(path);
+  await app.opened(done.session);
+  if (!context.mounted) return;
+  await Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => RecoveryPhrasePage(
+        phrase: done.recoveryPhrase,
+        onDone: (ctx) => Navigator.of(ctx).pushReplacement(
+          MaterialPageRoute<void>(
+            builder: (_) => VaultPage(session: done.session),
+          ),
+        ),
+      ),
+    ),
+  );
 }

@@ -600,3 +600,254 @@ fn open_as_choice_is_kept_in_the_file_list() {
         Some("markdown")
     );
 }
+
+#[test]
+fn new_files_and_copies_share_data() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    tree(&src);
+    let (mut v, _) = Vault::create(&tmp.path().join("v"), PW, fast()).unwrap();
+    v.import(&[src.join("proj")], None, false, &mut |_| {})
+        .unwrap();
+    let proj = v.manifest().children(None)[0].id;
+
+    let note = v.create_file(Some(proj), "note.md", b"# new").unwrap();
+    let again = v.create_file(Some(proj), "note.md", b"").unwrap();
+    assert_eq!(v.manifest().get(&again).unwrap().name, "note (2).md");
+    let mut out = Vec::new();
+    v.read_file(note, &mut out).unwrap();
+    assert_eq!(out, b"# new");
+
+    // "Save as copy" keeps the bytes.
+    let copy = v.add_copy(note, "note (edited).md", b"# edited").unwrap();
+    out.clear();
+    v.read_file(copy, &mut out).unwrap();
+    assert_eq!(out, b"# edited");
+
+    // Copy the whole folder into a new one, then delete the original.
+    let dest = v.create_folder(None, "backup").unwrap();
+    let proj2 = v.copy_to(proj, Some(dest)).unwrap();
+    assert!(v.copy_to(proj, Some(proj)).is_err());
+    let names = |v: &Vault, p| {
+        let mut n: Vec<String> = v
+            .manifest()
+            .children(Some(p))
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        n.sort();
+        n
+    };
+    assert_eq!(names(&v, proj), names(&v, proj2));
+    v.delete(&[proj]).unwrap();
+    let big = v
+        .manifest()
+        .children(Some(proj2))
+        .iter()
+        .find(|e| e.name == "big.bin")
+        .unwrap()
+        .id;
+    out.clear();
+    v.read_file(big, &mut out).unwrap();
+    assert_eq!(out.len(), 300_000);
+    v.check_parent(Some(proj2)).unwrap();
+}
+
+fn names_in(v: &Vault, parent: Option<Id>) -> Vec<String> {
+    let mut n: Vec<String> = v
+        .manifest()
+        .children(parent)
+        .iter()
+        .map(|e| e.name.clone())
+        .collect();
+    n.sort();
+    n
+}
+
+fn child_id(v: &Vault, parent: Option<Id>, name: &str) -> Id {
+    v.manifest()
+        .children(parent)
+        .iter()
+        .find(|e| e.name == name)
+        .unwrap()
+        .id
+}
+
+fn read_all(v: &mut Vault, id: Id) -> Vec<u8> {
+    let mut out = Vec::new();
+    v.read_file(id, &mut out).unwrap();
+    out
+}
+
+#[test]
+fn single_file_vault_round_trip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    tree(&src);
+    let path = tmp.path().join("v.atropos");
+    let (mut v, phrase) = Vault::create_single(&path, PW, fast()).unwrap();
+    assert!(v.is_single() && is_vault(&path) && path.is_file());
+    assert!(Vault::create_single(&path, PW, fast()).is_err());
+
+    // Import reads the originals only when the file is written.
+    let o = v
+        .import(&[src.join("proj")], None, false, &mut |_| {})
+        .unwrap();
+    assert!(o.files >= 4);
+    let proj = child_id(&v, None, "proj");
+    let big = child_id(&v, Some(proj), "big.bin");
+    assert_eq!(
+        read_all(&mut v, big),
+        fs::read(src.join("proj/big.bin")).unwrap()
+    );
+    let docs = v.create_folder(None, "docs").unwrap();
+    let note = v.create_file(Some(docs), "note.md", b"# note").unwrap();
+    let readme = child_id(&v, Some(proj), "readme.md");
+    v.move_to(readme, Some(docs)).unwrap();
+    v.rename(readme, "readme.txt").unwrap();
+    v.copy_to(proj, Some(docs)).unwrap();
+    v.replace_contents(note, b"# note, edited").unwrap();
+    v.persist(&mut |_| {}).unwrap();
+    assert!(!path.with_extension("atropos-part").exists());
+    drop(v);
+
+    // Everything is back after unlocking with the password or the phrase.
+    let key = recovery::from_phrase(&phrase).unwrap();
+    for how in [Unlock::Password(PW), Unlock::Recovery(&key)] {
+        let mut v = Vault::unlock(&path, &how).unwrap();
+        assert!(v.is_single());
+        assert_eq!(names_in(&v, None), ["docs", "proj"]);
+        assert_eq!(names_in(&v, Some(docs)), ["note.md", "proj", "readme.txt"]);
+        assert_eq!(read_all(&mut v, note), b"# note, edited");
+        assert_eq!(read_all(&mut v, readme), b"# hi\n");
+        let copy = child_id(&v, Some(docs), "proj");
+        let big2 = child_id(&v, Some(copy), "big.bin");
+        assert_eq!(read_all(&mut v, big2), read_all(&mut v, big));
+        let report = v.check(&mut |_| {}).unwrap();
+        assert!(report.is_clean(), "{report:?}");
+    }
+    assert!(Vault::unlock(&path, &Unlock::Password(b"wrong-password-123")).is_err());
+
+    // Copies share their data in the file too: about one big.bin, not two.
+    let size = fs::metadata(&path).unwrap().len();
+    assert!(size < 2 * 128 * 1024 + 300_000 + 200_000, "{size}");
+
+    // Delete, discard an unsaved change, and delete the originals on import.
+    let mut v = Vault::unlock(&path, &Unlock::Password(PW)).unwrap();
+    v.delete(&[proj]).unwrap();
+    v.persist(&mut |_| {}).unwrap();
+    v.create_folder(None, "not saved").unwrap();
+    v.discard_changes().unwrap();
+    assert_eq!(names_in(&v, None), ["docs"]);
+    let loose = tmp.path().join("loose.txt");
+    fs::write(&loose, b"loose").unwrap();
+    v.import(std::slice::from_ref(&loose), None, true, &mut |_| {})
+        .unwrap();
+    assert!(!loose.exists());
+    let l = child_id(&v, None, "loose.txt");
+    assert_eq!(read_all(&mut v, l), b"loose");
+}
+
+#[test]
+fn single_file_vault_unlock_methods() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("v.atropos");
+    let (mut v, _) = Vault::create_single(&path, PW, fast()).unwrap();
+    let f = v.create_file(None, "a.txt", b"abc").unwrap();
+    v.persist(&mut |_| {}).unwrap();
+    let dev = b"tablet-1";
+    let secret = v.enroll_device(dev, "Tablet").unwrap();
+    drop(v);
+    let how = Unlock::Device {
+        device: dev,
+        secret: &secret,
+    };
+    let mut v = Vault::unlock(&path, &how).unwrap();
+    assert_eq!(read_all(&mut v, f), b"abc");
+
+    // A new password: the old one stops working in both key areas.
+    let new_pw: &[u8] = b"amber-glacier-sonnet-4";
+    v.change_password(new_pw, fast()).unwrap();
+    drop(v);
+    assert!(Vault::unlock(&path, &Unlock::Password(PW)).is_err());
+    let mut v = Vault::unlock(&path, &Unlock::Password(new_pw)).unwrap();
+    assert_eq!(read_all(&mut v, f), b"abc");
+    drop(v);
+
+    // A key area cut off mid-write: the other one still opens.
+    let mut bytes = fs::read(&path).unwrap();
+    for b in &mut bytes[12..12 + 2000] {
+        *b = 0xff;
+    }
+    fs::write(&path, &bytes).unwrap();
+    let mut v = Vault::unlock(&path, &Unlock::Password(new_pw)).unwrap();
+    assert_eq!(read_all(&mut v, f), b"abc");
+    // Writing the header again repairs both areas.
+    v.remove_device(dev).unwrap();
+    drop(v);
+    let bytes = fs::read(&path).unwrap();
+    assert_ne!(bytes[12], 0xff);
+    assert!(Vault::unlock(&path, &how).is_err());
+
+    // Tampering with the files is caught.
+    let mut bytes = fs::read(&path).unwrap();
+    let n = bytes.len();
+    bytes[n - 40] ^= 1;
+    fs::write(&path, &bytes).unwrap();
+    assert!(Vault::unlock(&path, &Unlock::Password(new_pw)).is_err());
+}
+
+#[test]
+fn convert_rekey_and_upgrade() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    tree(&src);
+    // Folder vault -> single file -> folder vault, same password.
+    let (mut lfs, phrase) = Vault::create(&tmp.path().join("lfs"), PW, fast()).unwrap();
+    lfs.import(&[src.join("proj")], None, false, &mut |_| {})
+        .unwrap();
+    let one = tmp.path().join("one.atropos");
+    lfs.convert(&one, &mut |_| {}).unwrap();
+    let key = recovery::from_phrase(&phrase).unwrap();
+    let mut s = Vault::unlock(&one, &Unlock::Recovery(&key)).unwrap();
+    assert!(s.is_single());
+    let proj = child_id(&s, None, "proj");
+    let big = child_id(&s, Some(proj), "big.bin");
+    assert_eq!(read_all(&mut s, big).len(), 300_000);
+    let back = tmp.path().join("back");
+    s.convert(&back, &mut |_| {}).unwrap();
+    let mut b = Vault::unlock(&back, &Unlock::Password(PW)).unwrap();
+    assert!(!b.is_single());
+    assert_eq!(read_all(&mut b, big).len(), 300_000);
+    assert!(b.check(&mut |_| {}).unwrap().is_clean());
+    assert!(s.convert(&back, &mut |_| {}).is_err());
+
+    // Re-key a single file: new recovery phrase, same password.
+    let phrase2 = s.rekey(PW, fast(), &mut |_| {}).unwrap();
+    assert!(Vault::unlock(&one, &Unlock::Recovery(&key)).is_err());
+    let key2 = recovery::from_phrase(&phrase2).unwrap();
+    let mut s2 = Vault::unlock(&one, &Unlock::Recovery(&key2)).unwrap();
+    assert_eq!(read_all(&mut s2, big).len(), 300_000);
+    drop(s2);
+    assert_eq!(read_all(&mut s, big).len(), 300_000);
+
+    // An older passphrase file becomes a single-file vault in place.
+    let pkg = tmp.path().join("old.atropos");
+    package::create(
+        &pkg,
+        package::SealTo::Passphrase(PW),
+        &[src.join("proj")],
+        None,
+        &mut |_| {},
+    )
+    .unwrap();
+    assert!(!single::is_single(&pkg));
+    let (mut u, phrase3) = Vault::upgrade_package(&pkg, PW, &mut |_| {}).unwrap();
+    assert!(u.is_single() && single::is_single(&pkg));
+    let proj = child_id(&u, None, "proj");
+    let readme = child_id(&u, Some(proj), "readme.md");
+    assert_eq!(read_all(&mut u, readme), b"# hi\n");
+    drop(u);
+    let key3 = recovery::from_phrase(&phrase3).unwrap();
+    Vault::unlock(&pkg, &Unlock::Recovery(&key3)).unwrap();
+}
