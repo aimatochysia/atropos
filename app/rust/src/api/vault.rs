@@ -82,6 +82,8 @@ pub struct VaultInfo {
     pub created: i64,
     /// Hex; names this vault's biometric key in the platform keystore.
     pub vault_id: String,
+    /// One `.atropos` file ("Vault"), not a folder ("Vault LFS").
+    pub single: bool,
 }
 
 #[derive(Clone)]
@@ -124,7 +126,7 @@ pub(crate) fn progress_info(p: &Progress) -> ProgressInfo {
     }
 }
 
-fn outcome_info(o: Outcome) -> OutcomeInfo {
+pub(crate) fn outcome_info(o: Outcome) -> OutcomeInfo {
     OutcomeInfo {
         files: o.files,
         folders: o.folders,
@@ -135,7 +137,7 @@ fn outcome_info(o: Outcome) -> OutcomeInfo {
 }
 
 /// Reports progress at most every ~100 ms, plus the first and last update.
-fn reporter(sink: &StreamSink<TaskEvent>) -> impl FnMut(&Progress) + '_ {
+pub(crate) fn reporter(sink: &StreamSink<TaskEvent>) -> impl FnMut(&Progress) + '_ {
     let mut last = std::time::Instant::now() - std::time::Duration::from_secs(1);
     move |p: &Progress| {
         let done = p.files_done == p.files_total;
@@ -155,21 +157,25 @@ pub(crate) fn parse_id(id: &str) -> CoreResult<Id> {
         })
 }
 
-fn parse_ids(ids: &[String]) -> CoreResult<Vec<Id>> {
+pub(crate) fn parse_ids(ids: &[String]) -> CoreResult<Vec<Id>> {
     ids.iter().map(|i| parse_id(i)).collect()
 }
 
-fn parse_parent(parent: Option<String>) -> CoreResult<Option<Id>> {
+pub(crate) fn parse_parent(parent: Option<String>) -> CoreResult<Option<Id>> {
     parent.map(|p| parse_id(&p)).transpose()
 }
 
 fn vault_name(path: &Path) -> String {
-    path.file_name()
-        .map(|n| n.to_string_lossy().to_string())
+    let name = if path.is_file() {
+        path.file_stem()
+    } else {
+        path.file_name()
+    };
+    name.map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| path_to_string(path))
 }
 
-/// Whether `path` is an Atropos vault folder.
+/// Whether `path` is an Atropos vault (a folder, or a single-file vault).
 #[frb(sync)]
 pub fn is_vault(path: String) -> bool {
     vault::is_vault(Path::new(&path))
@@ -184,7 +190,47 @@ pub fn inspect_vault(path: String) -> CoreResult<VaultInfo> {
         path,
         created: h.body.created,
         vault_id: hex::encode(&h.body.vault_id),
+        single: p.is_file(),
     })
+}
+
+/// Whether `path` is an older `.atropos` file locked with a passphrase,
+/// which [upgrade_package] can turn into a single-file vault.
+#[frb(sync)]
+pub fn is_old_package(path: String) -> bool {
+    let p = Path::new(&path);
+    p.is_file()
+        && !vault::single::is_single(p)
+        && matches!(package::inspect(p), Ok(PackageLock::Passphrase))
+}
+
+/// Turns an older passphrase-locked `.atropos` file into a single-file
+/// vault in place: the passphrase becomes its password, and it gets a
+/// recovery phrase (sent with [RekeyEvent::Done], shown once) and every
+/// other unlock method.
+pub fn upgrade_package(
+    path: String,
+    passphrase: &SecretInput,
+    sink: StreamSink<RekeyEvent>,
+) -> CoreResult<()> {
+    let pw = passphrase.bytes();
+    let (v, phrase) = Vault::upgrade_package(Path::new(&path), &pw, &mut reporter_rekey(&sink))
+        .map_err(wrong_secret)?;
+    let _ = sink.add(RekeyEvent::Done(RekeyDone {
+        session: session(v),
+        recovery_phrase: phrase.to_string(),
+    }));
+    Ok(())
+}
+
+fn reporter_rekey(sink: &StreamSink<RekeyEvent>) -> impl FnMut(&Progress) + '_ {
+    let mut last = std::time::Instant::now() - std::time::Duration::from_secs(1);
+    move |p: &Progress| {
+        if p.files_done == p.files_total || last.elapsed().as_millis() >= 100 {
+            last = std::time::Instant::now();
+            let _ = sink.add(RekeyEvent::Progress(progress_info(p)));
+        }
+    }
 }
 
 /// An unlocked vault. Clones share the same keys; `lock()` on any of them
@@ -195,6 +241,7 @@ pub struct VaultSession {
     inner: Arc<Mutex<Option<Vault>>>,
     path: String,
     vault_id: String,
+    single: bool,
     /// Open viewers; their plaintext is wiped when the vault locks.
     pub(crate) viewers: Arc<Mutex<Vec<Weak<crate::view::Slot>>>>,
 }
@@ -245,20 +292,33 @@ fn session(v: Vault) -> VaultSession {
     VaultSession {
         path: path_to_string(v.path()),
         vault_id: hex::encode(v.vault_id()),
+        single: v.is_single(),
         inner: Arc::new(Mutex::new(Some(v))),
         viewers: Arc::default(),
     }
 }
 
-/// Creates the vault folder `parent_dir/name` with `password`.
+/// Creates a vault in `parent_dir` with `password`: the single file
+/// `name.atropos` ("Vault"), or with `lfs` the folder `name` ("Vault LFS").
 pub fn create_vault(
     parent_dir: String,
     name: String,
     password: &SecretInput,
+    lfs: bool,
 ) -> CoreResult<CreatedVault> {
     let name = vault::clean_name(&name)?;
-    let path = Path::new(&parent_dir).join(name);
-    let (v, phrase) = Vault::create(&path, &password.bytes(), Argon2Cost::DEFAULT)?;
+    let (v, phrase) = if lfs {
+        let path = Path::new(&parent_dir).join(name);
+        Vault::create(&path, &password.bytes(), Argon2Cost::DEFAULT)?
+    } else {
+        let file = if name.to_lowercase().ends_with(".atropos") {
+            name
+        } else {
+            format!("{name}.atropos")
+        };
+        let path = Path::new(&parent_dir).join(file);
+        Vault::create_single(&path, &password.bytes(), Argon2Cost::DEFAULT)?
+    };
     Ok(CreatedVault {
         session: session(v),
         recovery_phrase: phrase.to_string(),
@@ -440,10 +500,35 @@ impl VaultSession {
         g.as_ref().map(f)
     }
 
+    /// Runs `f` on the vault. A single-file vault's changes are written to
+    /// its file afterwards; if that fails they are dropped, so what is shown
+    /// always matches the file.
     pub(crate) fn with<T>(&self, f: impl FnOnce(&mut Vault) -> CoreResult<T>) -> CoreResult<T> {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let v = g.as_mut().ok_or_else(locked)?;
-        f(v)
+        let out = f(v).and_then(|o| v.persist(&mut |_| {}).map(|_| o));
+        if out.is_err() {
+            let _ = v.discard_changes();
+        }
+        out
+    }
+
+    /// One `.atropos` file ("Vault"), not a folder ("Vault LFS").
+    #[frb(sync, getter)]
+    pub fn is_single(&self) -> bool {
+        self.single
+    }
+
+    /// Writes a copy of this vault as the other kind at `out` (a single
+    /// file becomes a folder vault and the other way round), with the same
+    /// password, recovery phrase and unlock methods. This vault stays.
+    pub fn convert(&self, out: String, sink: StreamSink<TaskEvent>) -> CoreResult<()> {
+        let o = self.with(|v| {
+            v.convert(Path::new(&out), &mut reporter(&sink))?;
+            Ok(Outcome::default())
+        })?;
+        let _ = sink.add(TaskEvent::Done(outcome_info(o)));
+        Ok(())
     }
 
     #[frb(sync, getter)]
@@ -592,6 +677,62 @@ impl VaultSession {
     pub fn create_folder(&self, parent: Option<String>, name: String) -> CoreResult<String> {
         let parent = parse_parent(parent)?;
         self.with(|v| v.create_folder(parent, &name).map(hex::encode))
+    }
+
+    /// Creates a text file in `parent`. Returns its id.
+    pub fn create_file(
+        &self,
+        parent: Option<String>,
+        name: String,
+        text: String,
+    ) -> CoreResult<String> {
+        let parent = parse_parent(parent)?;
+        let text = Zeroizing::new(text);
+        self.with(|v| {
+            v.create_file(parent, &name, text.as_bytes())
+                .map(hex::encode)
+        })
+    }
+
+    /// Copies items (folders with everything inside) into `parent`.
+    pub fn copy_to(&self, ids: Vec<String>, parent: Option<String>) -> CoreResult<()> {
+        let ids = parse_ids(&ids)?;
+        let parent = parse_parent(parent)?;
+        self.with(|v| {
+            ids.iter()
+                .try_for_each(|id| v.copy_to(*id, parent).map(|_| ()))
+        })
+    }
+
+    /// Files, folders and bytes inside folder `id` (None = the whole vault).
+    pub fn folder_totals(&self, id: Option<String>) -> CoreResult<OutcomeInfo> {
+        let id = parse_parent(id)?;
+        self.with(|v| {
+            let mut o = OutcomeInfo {
+                files: 0,
+                folders: 0,
+                bytes: 0,
+                skipped: vec![],
+                originals_deleted: false,
+            };
+            let ids: Vec<Id> = match id {
+                Some(id) => v.manifest().subtree(id).into_iter().skip(1).collect(),
+                None => v.manifest().entries.keys().copied().collect(),
+            };
+            for i in ids {
+                let Some(e) = v.manifest().get(&i) else {
+                    continue;
+                };
+                match e.kind {
+                    Kind::Dir => o.folders += 1,
+                    _ => {
+                        o.files += 1;
+                        o.bytes += e.size;
+                    }
+                }
+            }
+            Ok(o)
+        })
     }
 
     pub fn rename(&self, id: String, name: String) -> CoreResult<()> {

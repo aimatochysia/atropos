@@ -121,6 +121,10 @@ pub struct Manifest {
     /// Segments that failed to decrypt and were skipped (see [Manifest::load]).
     pub damaged: Vec<PathBuf>,
     pub entries: BTreeMap<Id, Entry>,
+    /// Kept in memory only (a single-file vault writes the list itself).
+    memory: bool,
+    /// In-memory lists: changed since the vault file was last written.
+    pub changed: bool,
 }
 
 fn aad(vault_id: &[u8], seq: u64) -> Vec<u8> {
@@ -180,6 +184,23 @@ impl Manifest {
             segments,
             damaged,
             entries,
+            memory: false,
+            changed: false,
+        })
+    }
+
+    /// A file list that lives in memory only.
+    pub fn in_memory(entries: BTreeMap<Id, Entry>) -> CoreResult<Self> {
+        Ok(Self {
+            dir: PathBuf::new(),
+            key: AeadKey::new(&[0u8; 32])?,
+            vault_id: Vec::new(),
+            next_seq: 0,
+            segments: Vec::new(),
+            damaged: Vec::new(),
+            entries,
+            memory: true,
+            changed: false,
         })
     }
 
@@ -207,6 +228,11 @@ impl Manifest {
         if records.is_empty() {
             return Ok(());
         }
+        if self.memory {
+            apply(&mut self.entries, records);
+            self.changed = true;
+            return Ok(());
+        }
         let path = self.write_segment(false, &records)?;
         self.segments.push(path);
         apply(&mut self.entries, records);
@@ -218,6 +244,9 @@ impl Manifest {
 
     /// Rewrites the whole tree as one snapshot and removes older segments.
     pub fn compact(&mut self) -> CoreResult<()> {
+        if self.memory {
+            return Ok(());
+        }
         let records = self
             .entries
             .values()

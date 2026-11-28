@@ -133,6 +133,7 @@ impl Vault {
             ..CheckReport::default()
         };
         let objects = self.path.join(OBJECTS_DIR);
+        let single = self.is_single();
         let files: Vec<(Id, u64, Option<Id>)> = self
             .manifest
             .entries
@@ -152,7 +153,8 @@ impl Vault {
             p.current = self.display_path(&id);
             if let Some(b) = blob {
                 used.insert(b);
-                if missing_blobs.contains(&b) || !blob_path(&objects, &b).exists() {
+                let absent = !single && !blob_path(&objects, &b).exists();
+                if missing_blobs.contains(&b) || absent {
                     missing_blobs.insert(b);
                     report.missing.push(Problem {
                         id,
@@ -193,8 +195,10 @@ impl Vault {
             }
         }
         let mut all = Vec::new();
-        walk(&objects, &mut all);
-        walk(&self.path.join(MANIFEST_DIR), &mut all);
+        if !single {
+            walk(&objects, &mut all);
+            walk(&self.path.join(MANIFEST_DIR), &mut all);
+        }
         for f in all {
             let ext = f.extension().and_then(|e| e.to_str()).unwrap_or("");
             if ext == "tmp" {
@@ -212,7 +216,7 @@ impl Vault {
         }
         for name in ["vault.tmp", "vault.hdr.tmp"] {
             let f = self.path.join(name);
-            if f.exists() {
+            if !single && f.exists() {
                 report.leftovers.push(f);
             }
         }
@@ -264,7 +268,9 @@ impl Vault {
         self.manifest.commit(records)?;
 
         let mut doomed = report.orphans.clone();
-        doomed.extend(freed_blobs.iter().map(|b| blob_path(&objects, b)));
+        if !self.is_single() {
+            doomed.extend(freed_blobs.iter().map(|b| blob_path(&objects, b)));
+        }
         doomed.sort();
         doomed.dedup();
         for f in doomed {
@@ -283,7 +289,10 @@ impl Vault {
                 out.deleted_leftovers += 1;
             }
         }
-        self.blobs.forget_keys();
+        if let super::Store::Folder(blobs) = &mut self.store {
+            blobs.forget_keys();
+        }
+        self.persist(&mut |_| {})?;
         Ok(out)
     }
 }

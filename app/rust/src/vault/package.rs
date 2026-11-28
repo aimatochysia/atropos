@@ -239,7 +239,8 @@ fn collect_vault(
 }
 
 /// Seals files from disk (`disk`) and/or from an unlocked vault (`from_vault`
-/// with `vault_items`) into the package file `out`.
+/// with `vault_items`) into the package file `out`. With no sources at all
+/// it makes an empty package (a new single-file vault).
 pub fn create(
     out: &Path,
     key: SealTo,
@@ -257,7 +258,7 @@ pub fn create(
             collect_vault(v, *id, &[], &mut items, &mut p)?;
         }
     }
-    if items.is_empty() {
+    if items.is_empty() && !(disk.is_empty() && from_vault.is_none()) {
         return Err(CoreError::InvalidInput {
             message: "nothing to put in the package".into(),
         });
@@ -442,9 +443,18 @@ pub fn open(
     dest: Destination,
     progress: &mut dyn FnMut(&Progress),
 ) -> CoreResult<Outcome> {
+    open_keyed(path, |h| stream_key(h, &key), dest, progress)
+}
+
+fn open_keyed(
+    path: &Path,
+    key: impl FnOnce(&Header) -> CoreResult<Zeroizing<[u8; 32]>>,
+    dest: Destination,
+    progress: &mut dyn FnMut(&Progress),
+) -> CoreResult<Outcome> {
     let mut file = BufReader::new(fs::File::open(path)?);
     let (header, aad) = read_header(&mut file)?;
-    let k = stream_key(&header, &key)?;
+    let k = key(&header)?;
     let prefix: [u8; PREFIX_LEN] = header
         .prefix
         .as_slice()
@@ -791,6 +801,101 @@ mod tests {
     }
 }
 
+/// Where a rewritten file's bytes come from.
+enum Fill {
+    /// An item of the package as it is now.
+    Keep(usize),
+    Bytes(Zeroizing<Vec<u8>>),
+    Disk(PathBuf),
+    /// Folders and links have no bytes.
+    None,
+}
+
+impl Fill {
+    fn again(&self) -> Fill {
+        match self {
+            Fill::Keep(i) => Fill::Keep(*i),
+            Fill::Bytes(b) => Fill::Bytes(b.clone()),
+            Fill::Disk(p) => Fill::Disk(p.clone()),
+            Fill::None => Fill::None,
+        }
+    }
+}
+
+fn gone() -> CoreError {
+    CoreError::InvalidInput {
+        message: "that item is not in the package".into(),
+    }
+}
+
+fn child(parent: &[String], name: &str) -> Vec<String> {
+    let mut p = parent.to_vec();
+    p.push(name.to_string());
+    p
+}
+
+/// `path` with its leading `old` replaced by `new`.
+fn rebase(path: &[String], old: &[String], new: &[String]) -> Vec<String> {
+    let mut p = new.to_vec();
+    p.extend_from_slice(&path[old.len()..]);
+    p
+}
+
+fn new_item(path: Vec<String>, kind: Kind, size: u64) -> Item {
+    Item {
+        path,
+        kind,
+        size,
+        modified: super::now(),
+        executable: false,
+        link_target: None,
+    }
+}
+
+/// `parent` must be the top level or a folder of the package.
+fn check_folder(plan: &[(Item, Fill)], parent: &[String]) -> CoreResult<()> {
+    if parent.is_empty()
+        || plan
+            .iter()
+            .any(|(i, _)| i.path == parent && i.kind == Kind::Dir)
+    {
+        Ok(())
+    } else {
+        Err(CoreError::InvalidInput {
+            message: "that folder is not in the package".into(),
+        })
+    }
+}
+
+/// `wanted`, or `wanted (2)` and so on when `parent` already holds that
+/// name (ignoring case, and ignoring the item at `ignore`).
+fn free_name(
+    plan: &[(Item, Fill)],
+    parent: &[String],
+    wanted: &str,
+    ignore: Option<&[String]>,
+) -> String {
+    let taken = |n: &str| {
+        plan.iter().any(|(i, _)| {
+            i.path.len() == parent.len() + 1
+                && i.path.starts_with(parent)
+                && Some(i.path.as_slice()) != ignore
+                && i.path.last().is_some_and(|l| l.eq_ignore_ascii_case(n))
+        })
+    };
+    if !taken(wanted) {
+        return wanted.to_string();
+    }
+    let (stem, ext) = match wanted.rfind('.') {
+        Some(i) if i > 0 => (&wanted[..i], &wanted[i..]),
+        _ => (wanted, ""),
+    };
+    (2..)
+        .map(|n| format!("{stem} ({n}){ext}"))
+        .find(|n| !taken(n))
+        .unwrap_or_else(|| wanted.to_string())
+}
+
 /// One item of an opened package, for browsing.
 #[derive(Clone, Debug)]
 pub struct PackageItem {
@@ -939,19 +1044,264 @@ impl PackageReader {
         Ok(())
     }
 
+    /// The index of the item at `path`.
+    pub fn find(&self, path: &[String]) -> Option<usize> {
+        self.items.iter().position(|i| i.path == path)
+    }
+
     /// Writes the package again with file `index` holding `data`, under the
-    /// same lock (passphrase or vault) and a fresh nonce prefix. The new
-    /// package is written beside the old one and then swapped in, so a crash
-    /// leaves either the old or the new package, never half of one.
+    /// same lock (passphrase or vault) and a fresh nonce prefix.
     pub fn replace_file(&mut self, index: usize, data: &[u8]) -> CoreResult<()> {
         if self.items.get(index).map(|i| i.kind) != Some(Kind::File) {
             return Err(CoreError::InvalidInput {
                 message: "only files can be changed".into(),
             });
         }
-        let mut new_index = self.index.clone();
-        new_index[index].size = data.len() as u64;
-        new_index[index].modified = super::now();
+        let mut plan = self.plan();
+        plan[index].0.size = data.len() as u64;
+        plan[index].0.modified = super::now();
+        plan[index].1 = Fill::Bytes(Zeroizing::new(data.to_vec()));
+        self.rewrite(plan, &mut |_| {})
+    }
+
+    /// Creates an empty folder `name` (a free name) inside `parent`.
+    /// Returns its path.
+    pub fn create_folder(&mut self, parent: &[String], name: &str) -> CoreResult<Vec<String>> {
+        let mut plan = self.plan();
+        check_folder(&plan, parent)?;
+        let path = child(parent, &free_name(&plan, parent, &clean_name(name)?, None));
+        plan.push((new_item(path.clone(), Kind::Dir, 0), Fill::None));
+        self.rewrite(plan, &mut |_| {})?;
+        Ok(path)
+    }
+
+    /// Creates file `name` (a free name) inside `parent`, holding `data`.
+    /// Returns its path.
+    pub fn create_file(
+        &mut self,
+        parent: &[String],
+        name: &str,
+        data: &[u8],
+    ) -> CoreResult<Vec<String>> {
+        let mut plan = self.plan();
+        check_folder(&plan, parent)?;
+        let path = child(parent, &free_name(&plan, parent, &clean_name(name)?, None));
+        plan.push((
+            new_item(path.clone(), Kind::File, data.len() as u64),
+            Fill::Bytes(Zeroizing::new(data.to_vec())),
+        ));
+        self.rewrite(plan, &mut |_| {})?;
+        Ok(path)
+    }
+
+    /// Adds files and folders from disk into `parent`.
+    pub fn add_from_disk(
+        &mut self,
+        parent: &[String],
+        sources: &[PathBuf],
+        progress: &mut dyn FnMut(&Progress),
+    ) -> CoreResult<Outcome> {
+        let mut plan = self.plan();
+        check_folder(&plan, parent)?;
+        let mut outcome = Outcome::default();
+        for src in sources {
+            let mut found = Vec::new();
+            let mut p = Progress::default();
+            collect_disk(src, parent, &mut found, &mut p)?;
+            let Some((top, _)) = found.first() else {
+                continue;
+            };
+            let old = top.path.clone();
+            let name = old.last().cloned().unwrap_or_default();
+            let name = free_name(&plan, parent, &clean_name(&name)?, None);
+            let new = child(parent, &name);
+            for (mut item, source) in found {
+                item.path = rebase(&item.path, &old, &new);
+                match item.kind {
+                    Kind::Dir => outcome.folders += 1,
+                    _ => {
+                        outcome.files += 1;
+                        outcome.bytes += item.size;
+                    }
+                }
+                let fill = match source {
+                    Source::Disk(path) if item.kind == Kind::File => Fill::Disk(path),
+                    _ => Fill::None,
+                };
+                plan.push((item, fill));
+            }
+        }
+        self.rewrite(plan, progress)?;
+        Ok(outcome)
+    }
+
+    /// Renames the item at `path` (a folder with everything in it). Returns
+    /// its new path.
+    pub fn rename(&mut self, path: &[String], name: &str) -> CoreResult<Vec<String>> {
+        let mut plan = self.plan();
+        let (parent, _) = path.split_last().map(|(l, p)| (p, l)).ok_or_else(gone)?;
+        if !plan.iter().any(|(i, _)| i.path == path) {
+            return Err(gone());
+        }
+        let new = child(
+            parent,
+            &free_name(&plan, parent, &clean_name(name)?, Some(path)),
+        );
+        for (item, _) in plan.iter_mut() {
+            if item.path.starts_with(path) {
+                item.path = rebase(&item.path, path, &new);
+            }
+        }
+        self.rewrite(plan, &mut |_| {})?;
+        Ok(new)
+    }
+
+    /// Moves items (folders with everything in them) into `parent`.
+    pub fn move_to(&mut self, paths: &[Vec<String>], parent: &[String]) -> CoreResult<()> {
+        let mut plan = self.plan();
+        check_folder(&plan, parent)?;
+        for path in paths {
+            if parent.starts_with(path) {
+                return Err(CoreError::InvalidInput {
+                    message: "a folder cannot be moved into itself".into(),
+                });
+            }
+            if path.split_last().map(|(_, p)| p) == Some(parent) {
+                continue;
+            }
+            let name = path.last().ok_or_else(gone)?;
+            if !plan.iter().any(|(i, _)| &i.path == path) {
+                return Err(gone());
+            }
+            let new = child(parent, &free_name(&plan, parent, name, None));
+            // The moved items go to the end, after the folder they land in.
+            let (mut moved, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut plan)
+                .into_iter()
+                .partition(|(i, _)| i.path.starts_with(path));
+            for (item, _) in moved.iter_mut() {
+                item.path = rebase(&item.path, path, &new);
+            }
+            plan = rest;
+            plan.append(&mut moved);
+        }
+        self.rewrite(plan, &mut |_| {})
+    }
+
+    /// Copies items (folders with everything in them) into `parent`.
+    pub fn copy_to(&mut self, paths: &[Vec<String>], parent: &[String]) -> CoreResult<()> {
+        let mut plan = self.plan();
+        check_folder(&plan, parent)?;
+        for path in paths {
+            if parent.starts_with(path) {
+                return Err(CoreError::InvalidInput {
+                    message: "a folder cannot be copied into itself".into(),
+                });
+            }
+            let name = path.last().ok_or_else(gone)?;
+            let copies: Vec<(Item, Fill)> = plan
+                .iter()
+                .filter(|(i, _)| i.path.starts_with(path))
+                .map(|(i, f)| (i.clone(), f.again()))
+                .collect();
+            if copies.is_empty() {
+                return Err(gone());
+            }
+            let new = child(parent, &free_name(&plan, parent, name, None));
+            for (mut item, fill) in copies {
+                item.path = rebase(&item.path, path, &new);
+                plan.push((item, fill));
+            }
+        }
+        self.rewrite(plan, &mut |_| {})
+    }
+
+    /// Deletes items (folders with everything in them).
+    pub fn delete(&mut self, paths: &[Vec<String>]) -> CoreResult<()> {
+        let mut plan = self.plan();
+        plan.retain(|(i, _)| !paths.iter().any(|p| i.path.starts_with(p)));
+        self.rewrite(plan, &mut |_| {})
+    }
+
+    /// Opens the whole package into `dest` with the key it is already open
+    /// with.
+    pub fn extract(
+        &self,
+        dest: Destination,
+        progress: &mut dyn FnMut(&Progress),
+    ) -> CoreResult<Outcome> {
+        let key = self.raw_key.clone();
+        open_keyed(&self.path, |_| Ok(key), dest, progress)
+    }
+
+    /// The items as vault entries with fresh ids. A file's data offset is
+    /// its index here, for reading it again with [PackageReader::read_file].
+    pub(crate) fn vault_entries(&self) -> CoreResult<std::collections::BTreeMap<Id, Entry>> {
+        use std::collections::{BTreeMap, HashMap};
+        let mut ids: HashMap<&[String], Id> = HashMap::new();
+        let mut out = BTreeMap::new();
+        for (i, item) in self.index.iter().enumerate() {
+            let id = random_array::<16>()?;
+            let parent = match item.path.split_last() {
+                Some((_, up)) if !up.is_empty() => {
+                    Some(*ids.get(up).ok_or(CoreError::DecryptFailed)?)
+                }
+                _ => None,
+            };
+            ids.insert(&item.path, id);
+            out.insert(
+                id,
+                Entry {
+                    id,
+                    parent,
+                    name: item.path.last().cloned().unwrap_or_default(),
+                    kind: item.kind,
+                    size: item.size,
+                    modified: item.modified,
+                    executable: item.executable,
+                    link_target: item.link_target.clone(),
+                    data: (item.kind == Kind::File && item.size > 0).then_some(
+                        super::manifest::DataRef {
+                            blob: super::single::STREAM,
+                            offset: i as u64,
+                            len: item.size,
+                        },
+                    ),
+                    sha256: None,
+                    open_as: None,
+                },
+            );
+        }
+        Ok(out)
+    }
+
+    /// Every item as it is now, each keeping its own bytes.
+    fn plan(&self) -> Vec<(Item, Fill)> {
+        self.index
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, item)| {
+                let fill = if item.kind == Kind::File {
+                    Fill::Keep(i)
+                } else {
+                    Fill::None
+                };
+                (item, fill)
+            })
+            .collect()
+    }
+
+    /// Writes the package again with the items of `plan`, under the same
+    /// lock (passphrase or vault) and a fresh nonce prefix. The new package
+    /// is written beside the old one and then swapped in, so a crash leaves
+    /// either the old or the new package, never half of one.
+    fn rewrite(
+        &mut self,
+        plan: Vec<(Item, Fill)>,
+        progress: &mut dyn FnMut(&Progress),
+    ) -> CoreResult<()> {
+        let new_index: Vec<Item> = plan.iter().map(|(i, _)| i.clone()).collect();
+        validate(&new_index)?;
         let prefix = random_array::<PREFIX_LEN>()?;
         let header = Header {
             version: 1,
@@ -963,12 +1313,14 @@ impl PackageReader {
         aad.extend_from_slice(&(hb.len() as u32).to_be_bytes());
         aad.extend_from_slice(&hb);
         let index_json = Zeroizing::new(serde_json::to_vec(&new_index)?);
-        let data_len: u64 = new_index
-            .iter()
-            .filter(|i| i.kind == Kind::File)
-            .map(|i| i.size)
-            .sum();
-        let plain_len = 8 + index_json.len() as u64 + data_len;
+        let files = new_index.iter().filter(|i| i.kind == Kind::File);
+        let mut p = Progress {
+            files_total: files.clone().count() as u64,
+            bytes_total: files.map(|i| i.size).sum(),
+            ..Default::default()
+        };
+        progress(&p);
+        let plain_len = 8 + index_json.len() as u64 + p.bytes_total;
         let tmp = self.path.with_extension("atropos-part");
         let key = self.raw_key.clone();
         let result = (|| -> CoreResult<()> {
@@ -977,15 +1329,32 @@ impl PackageReader {
             let mut w = StreamWriter::new(file, &key, prefix, &aad)?;
             w.write_all(&(index_json.len() as u64).to_be_bytes())?;
             w.write_all(&index_json)?;
-            for (i, item) in self.index.clone().iter().enumerate() {
+            for (item, fill) in &plan {
                 if item.kind != Kind::File {
                     continue;
                 }
-                if i == index {
-                    w.write_all(data)?;
-                } else {
-                    self.read_file(i, &mut w)?;
+                p.current = item.path.last().cloned().unwrap_or_default();
+                let before = w.written;
+                match fill {
+                    Fill::Keep(i) => self.read_file(*i, &mut w)?,
+                    Fill::Bytes(b) => w.write_all(b)?,
+                    Fill::Disk(path) => {
+                        let mut f = fs::File::open(path)?.take(item.size + 1);
+                        std::io::copy(&mut f, &mut w)?;
+                    }
+                    Fill::None => {}
                 }
+                if w.written - before != item.size {
+                    return Err(CoreError::InvalidInput {
+                        message: format!(
+                            "{} changed while it was being packed; try again",
+                            p.current
+                        ),
+                    });
+                }
+                p.files_done += 1;
+                p.bytes_done += item.size;
+                progress(&p);
             }
             let pad = padme(plain_len.max(4096)) - plain_len;
             std::io::copy(&mut std::io::repeat(0).take(pad), &mut w)?;
@@ -1090,5 +1459,117 @@ mod reader_tests {
             fs::read(dest.join("photos/note.txt")).unwrap(),
             b"secret note, edited"
         );
+    }
+}
+
+#[cfg(test)]
+mod edit_tests {
+    use super::*;
+
+    const PW: &[u8] = b"violet-harbor-tundra-9";
+
+    fn p(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn paths(r: &PackageReader) -> Vec<String> {
+        r.items().iter().map(|i| i.path.join("/")).collect()
+    }
+
+    fn read(r: &mut PackageReader, path: &[&str]) -> Vec<u8> {
+        let i = r.find(&p(path)).unwrap();
+        let mut out = Vec::new();
+        r.read_file(i, &mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn manage_files_inside_a_package() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg = tmp.path().join("v.atropos");
+        // An empty package is a new single-file vault.
+        create(&pkg, SealTo::Passphrase(PW), &[], None, &mut |_| {}).unwrap();
+        let mut r = PackageReader::open(&pkg, PackageKey::Passphrase(PW)).unwrap();
+        assert!(r.items().is_empty());
+
+        let docs = r.create_folder(&[], "docs").unwrap();
+        assert_eq!(docs, p(&["docs"]));
+        assert_eq!(r.create_folder(&[], "Docs").unwrap(), p(&["Docs (2)"]));
+        r.create_file(&docs, "note.md", b"# hi").unwrap();
+        assert_eq!(
+            r.create_file(&docs, "note.md", b"two").unwrap(),
+            p(&["docs", "note (2).md"])
+        );
+        assert!(r.create_file(&p(&["nope"]), "x", b"").is_err());
+        assert!(r.create_file(&[], "a/b", b"").is_err());
+
+        // Add from disk: a folder and a file, with a clashing name.
+        let src = tmp.path().join("photos");
+        fs::create_dir_all(src.join("2026")).unwrap();
+        let big: Vec<u8> = (0..150_000u32).map(|i| (i % 249) as u8).collect();
+        fs::write(src.join("2026/a.bin"), &big).unwrap();
+        let loose = tmp.path().join("docs");
+        fs::write(&loose, b"loose file").unwrap();
+        let o = r
+            .add_from_disk(&[], &[src.clone(), loose], &mut |_| {})
+            .unwrap();
+        assert_eq!((o.files, o.folders), (2, 2));
+        assert!(paths(&r).contains(&"photos/2026/a.bin".to_string()));
+        assert_eq!(read(&mut r, &["docs (3)"]), b"loose file");
+
+        // Rename a folder: everything inside follows.
+        let pics = r.rename(&p(&["photos"]), "pictures").unwrap();
+        assert_eq!(read(&mut r, &["pictures", "2026", "a.bin"]), big);
+
+        // Move into another folder, and refuse moving into itself.
+        r.move_to(std::slice::from_ref(&pics), &docs).unwrap();
+        assert_eq!(read(&mut r, &["docs", "pictures", "2026", "a.bin"]), big);
+        assert!(r
+            .move_to(std::slice::from_ref(&docs), &p(&["docs", "pictures"]))
+            .is_err());
+        // Parents always come before their children.
+        let all = paths(&r);
+        for (i, path) in all.iter().enumerate() {
+            if let Some((up, _)) = path.rsplit_once('/') {
+                assert!(all[..i].contains(&up.to_string()), "{all:?}");
+            }
+        }
+
+        // Copy a folder next to itself.
+        r.copy_to(std::slice::from_ref(&docs), &[]).unwrap();
+        assert_eq!(read(&mut r, &["docs (4)", "note.md"]), b"# hi");
+        assert_eq!(
+            read(&mut r, &["docs (4)", "pictures", "2026", "a.bin"]),
+            big
+        );
+        assert!(r.copy_to(std::slice::from_ref(&docs), &docs).is_err());
+
+        // Delete, then reopen from disk and extract to check it all holds.
+        r.delete(&[p(&["docs (4)"]), p(&["Docs (2)"])]).unwrap();
+        drop(r);
+        let mut r = PackageReader::open(&pkg, PackageKey::Passphrase(PW)).unwrap();
+        assert_eq!(
+            paths(&r),
+            [
+                "docs",
+                "docs/note.md",
+                "docs/note (2).md",
+                "docs (3)",
+                "docs/pictures",
+                "docs/pictures/2026",
+                "docs/pictures/2026/a.bin",
+            ]
+        );
+        assert_eq!(read(&mut r, &["docs", "note (2).md"]), b"two");
+        let out = tmp.path().join("out");
+        r.extract(Destination::Folder(&out), &mut |_| {}).unwrap();
+        assert_eq!(fs::read(out.join("docs/pictures/2026/a.bin")).unwrap(), big);
+        assert!(!pkg.with_extension("atropos-part").exists());
+
+        // Everything can go; the empty vault still opens.
+        r.delete(&[p(&["docs"]), p(&["docs (3)"])]).unwrap();
+        drop(r);
+        let r = PackageReader::open(&pkg, PackageKey::Passphrase(PW)).unwrap();
+        assert!(r.items().is_empty());
     }
 }

@@ -112,6 +112,9 @@ impl Vault {
             return Err(wrong_password());
         }
         let path = self.path.clone();
+        if self.is_single() {
+            return self.rekey_single(password, cost, progress);
+        }
         let tmp = sibling(&path, "rekey")?;
         let result = (|| -> CoreResult<Zeroizing<String>> {
             let (mut new, phrase) = Vault::create(&tmp, password, cost)?;
@@ -145,7 +148,53 @@ impl Vault {
         Ok(phrase)
     }
 
-    fn copy_into(
+    fn rekey_single(
+        &mut self,
+        password: &[u8],
+        cost: Argon2Cost,
+        progress: &mut dyn FnMut(&Progress),
+    ) -> CoreResult<Zeroizing<String>> {
+        self.persist(&mut |_| {})?;
+        let path = self.path.clone();
+        let (header, secrets, phrase) = super::new_keys_unchecked(password, cost)?;
+        let tmp = path.with_extension("atropos-rekey");
+        let entries = self.manifest.entries.clone();
+        let result = super::single::write_file(
+            &tmp,
+            &header,
+            1,
+            &secrets,
+            &entries,
+            &mut |e, w| self.read_file(e.id, &mut &mut *w).map(|_| ()),
+            progress,
+        )
+        .and_then(|_| {
+            // Read everything back through the new keys before switching.
+            let mut new = Vault::unlock(&tmp, &Unlock::Password(password))?;
+            let report = new.check(&mut |_| {})?;
+            if !report.damaged.is_empty() || !report.missing.is_empty() {
+                return Err(CoreError::InvalidInput {
+                    message: "the re-encrypted copy did not verify; nothing was changed".into(),
+                });
+            }
+            Ok(())
+        });
+        if let Err(e) = result {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+        // Let go of the old file first (Windows will not replace an open one).
+        self.store = super::Store::KeyOnly;
+        if let Err(e) = std::fs::rename(&tmp, &path) {
+            let _ = std::fs::remove_file(&tmp);
+            *self = Vault::unlock(&path, &Unlock::Password(password))?;
+            return Err(e.into());
+        }
+        *self = Vault::unlock(&path, &Unlock::Password(password))?;
+        Ok(phrase)
+    }
+
+    pub(crate) fn copy_into(
         &mut self,
         new: &mut Vault,
         progress: &mut dyn FnMut(&Progress),
